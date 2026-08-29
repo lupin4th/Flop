@@ -29,7 +29,23 @@ test('ensureHome creates the directory with mode 0700', () => {
 
 test('rejects a room name that would escape the archive directory', () => {
   process.env.TECHNOCORE_ATTEST_HOME = '/tmp/x';
-  assert.throws(() => archiveDir('../escape'), /room name/);
-  assert.throws(() => archiveDir('a/b'), /room name/);
+  assert.throws(() => archiveDir('.'), /unsafe room name/);
+  assert.throws(() => archiveDir('..'), /unsafe room name/);
+  assert.throws(() => archiveDir('../escape'), /unsafe room name/);
+  assert.throws(() => archiveDir('a/b'), /unsafe room name/);
+  assert.throws(() => archiveDir(''), /unsafe room name/);
+  assert.throws(() => archiveDir('a b'), /unsafe room name/);
+  // 65 characters — exceeds the 64-char limit
+  assert.throws(() => archiveDir('a'.repeat(65)), /unsafe room name/);
+  delete process.env.TECHNOCORE_ATTEST_HOME;
+});
+
+test('accepts legitimate room names with dots', () => {
+  process.env.TECHNOCORE_ATTEST_HOME = '/tmp/x';
+  // Verify that names containing dots (but not dot names) are accepted and contained
+  const path1 = archiveDir('room.v2');
+  assert.match(path1, /archive\/room\.v2$/);
+  const path2 = archiveDir('p-..');
+  assert.match(path2, /archive\/p-\.\.$/);
   delete process.env.TECHNOCORE_ATTEST_HOME;
 });
