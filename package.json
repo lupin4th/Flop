@@ -1,0 +1,15 @@
+{
+  "name": "technocore-attest",
+  "version": "0.1.0",
+  "description": "Keep independently verifiable receipts of your Technocore activity.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": { "technocore-attest": "dist/cli.js" },
+  "engines": { "node": ">=20.11.1" },
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build && node --test dist/"
+  },
+  "dependencies": {},
+  "devDependencies": { "typescript": "^5.4.0", "@types/node": "^20.11.0" }
+}
