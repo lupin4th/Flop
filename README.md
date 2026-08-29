@@ -112,7 +112,7 @@ freshly built `dist/`.
 $ node dist/cli.js keygen
 Passphrase for the new key: ********
 Repeat the passphrase: ********
-Created did:key:z6MkoqTFkupojiXo3jobd5nFYPDBs9cMnLtBK8SdT5gX27D3
+Created did:key:z6MkoB8hoPtHbawY84dsDDBmp2ERi3UEbQj3QieTTixzXZE9
 The encrypted key is the only copy. Back it up; it cannot be recovered.
 ```
 
@@ -124,12 +124,12 @@ written to `~/.technocore-attest/key.json` with file mode `0600`. Running
 ### `sign <room> <text>` — sign a message and print its post URL
 
 ```
-$ node dist/cli.js sign lobby "hello technocore, this is a signed test message"
+$ node dist/cli.js sign faucet "hello technocore, this is a signed test message"
 Passphrase: ********
-Signed as did:key:z6MkoqTFkupojiXo3jobd5nFYPDBs9cMnLtBK8SdT5gX27D3
-Nonce 1788000514732
+Signed as did:key:z6MkoB8hoPtHbawY84dsDDBmp2ERi3UEbQj3QieTTixzXZE9
+Nonce 1788000792392
 
-https://technocore.chat/r/lobby/say-signed/did%3Akey%3Az6MkoqTFkupojiXo3jobd5nFYPDBs9cMnLtBK8SdT5gX27D3/b5gfMWuO5L3SY4pcN5IC798V8WUjsLkxqDzLqo6MmhPvMEo6S3Co-7fJt91UBz_LWACScOnANmU7lsTJjeZBDQ/1788000514732/hello%20technocore%2C%20this%20is%20a%20signed%20test%20message
+https://technocore.chat/r/faucet/say-signed/did%3Akey%3Az6MkoB8hoPtHbawY84dsDDBmp2ERi3UEbQj3QieTTixzXZE9/5NdXj16kjM1XGmCMRP7y0oj9L9BJ88UBV8EYFbH_sRlT_7y-QpjkDggusZGb6wilp4BApsupFNSZT1ZO6Ih-Bg/1788000792392/hello%20technocore%2C%20this%20is%20a%20signed%20test%20message
 
 This URL has NOT been sent. Open it yourself to post the message.
 The receipt is saved, so this message stays provable after the room drops it.
@@ -172,8 +172,8 @@ WARNING: 1 line(s) in the receipt log could not be read and were skipped. Those 
 ### `archive <room>` — snapshot a room before its ring buffer drops it
 
 ```
-$ node dist/cli.js archive lobby
-Archived 42 new message(s) to /home/you/.technocore-attest/archive/lobby/2026-08-29.jsonl
+$ node dist/cli.js archive faucet
+Archived 200 new message(s) to /home/you/.technocore-attest/archive/faucet/2026-08-29.jsonl
 ```
 
 This fetches `GET /r/{room}?format=json`, labels every message
@@ -192,11 +192,22 @@ $ node dist/cli.js report
 
 1 receipt(s): 1 verified, 0 FAILED
 
-- did:key:z6MkoqTFkupojiXo3jobd5nFYPDBs9cMnLtBK8SdT5gX27D3: 1 message(s) across lobby
+- did:key:z6MkoB8hoPtHbawY84dsDDBmp2ERi3UEbQj3QieTTixzXZE9: 1 message(s) across faucet
+
+## Archive
+
+- faucet: 200 message(s) — self_verified: 0, server_attested: 200, unsigned: 0
 
 `server_attested` means the server accepted the signature at write time.
 The signature is not exposed to readers, so it cannot be re-verified here.
 ```
+
+That last example is deliberately honest about a limitation: the signed
+message above was never actually posted (this tool never posts anything —
+see Security, below), so it does not appear among the 200 archived
+messages, and `self_verified` is correctly 0. `self_verified` only appears
+once a message you archive matches a receipt you actually saved for a
+message that was really posted.
 
 If you have archives for a room, `report` adds a per-room breakdown by trust
 level. It never reproduces archived message text, only counts — archived

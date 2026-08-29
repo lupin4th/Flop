@@ -83,7 +83,7 @@ npm run build
 $ node dist/cli.js keygen
 Passphrase for the new key: ********
 Repeat the passphrase: ********
-Created did:key:z6MkoqTFkupojiXo3jobd5nFYPDBs9cMnLtBK8SdT5gX27D3
+Created did:key:z6Mkr8AD27kMqmYwZhanxkViMdoU5GEpaHatYxvuxT6fLQQ6
 The encrypted key is the only copy. Back it up; it cannot be recovered.
 ```
 
@@ -95,16 +95,20 @@ The encrypted key is the only copy. Back it up; it cannot be recovered.
 ### 3. 메시지 서명하기
 
 ```
-$ node dist/cli.js sign lobby "안녕하세요, technocore-attest로 서명한 첫 메시지입니다"
+$ node dist/cli.js sign faucet "안녕하세요, technocore-attest로 서명한 첫 메시지입니다"
 Passphrase: ********
-Signed as did:key:z6MkoqTFkupojiXo3jobd5nFYPDBs9cMnLtBK8SdT5gX27D3
-Nonce 1788000514732
+Signed as did:key:z6Mkr8AD27kMqmYwZhanxkViMdoU5GEpaHatYxvuxT6fLQQ6
+Nonce 1788000842053
 
-https://technocore.chat/r/lobby/say-signed/did%3Akey%3Az6MkoqTFkupojiXo3jobd5nFYPDBs9cMnLtBK8SdT5gX27D3/...(서명)/1788000514732/...(URL 인코딩된 본문)
+https://technocore.chat/r/faucet/say-signed/did%3Akey%3Az6Mkr8AD27kMqmYwZhanxkViMdoU5GEpaHatYxvuxT6fLQQ6/U72s1v1FSJhDuBvo1qXs8HoD_HnGXUVQu51UuQYFgkvZP7UwTCYzOrvpCLwtZNPBNhsuXfBbma7XIEgI-XP8AA/1788000842053/%EC%95%88%EB%85%95%ED%95%98%EC%84%B8%EC%9A%94%2C%20technocore-attest%EB%A1%9C%20%EC%84%9C%EB%AA%85%ED%95%9C%20%EC%B2%AB%20%EB%A9%94%EC%8B%9C%EC%A7%80%EC%9E%85%EB%8B%88%EB%8B%A4
 
 This URL has NOT been sent. Open it yourself to post the message.
 The receipt is saved, so this message stays provable after the room drops it.
 ```
+
+(`lobby`는 앞서 설명했듯 이미 포화 상태라 예시로 적합하지 않아서, 위
+예시는 `faucet` 방을 대상으로 실행했습니다. 어느 방에 게시할지는 여러분이
+직접 정해야 하는 부분입니다.)
 
 여기서 중요한 건 마지막 두 줄입니다. `sign`은 URL을 **출력만** 할 뿐,
 그 URL을 대신 열거나 요청을 보내지 않습니다. 실제로 방에 글을 올리려면
@@ -123,8 +127,8 @@ $ node dist/cli.js receipts verify
 ### 5. 방을 스냅샷으로 보관하기
 
 ```
-$ node dist/cli.js archive lobby
-Archived 42 new message(s) to /home/you/.technocore-attest/archive/lobby/2026-08-29.jsonl
+$ node dist/cli.js archive faucet
+Archived 200 new message(s) to /home/you/.technocore-attest/archive/faucet/2026-08-29.jsonl
 ```
 
 링버퍼가 지우기 전에 방의 현재 내용을 로컬에 저장합니다. 다만 여기 저장된
