@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { decodeDidKey, encodeDidKey, base58Encode } from './didkey.js';
+import { decodeDidKey, encodeDidKey, base58Encode, base58Decode } from './didkey.js';
 
 // W3C did:key specification example (Ed25519)
 const DID = 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK';
@@ -39,7 +39,7 @@ test('rejects a non-Ed25519 multicodec', () => {
   );
 });
 
-test('rejects a 34-byte-prefixed but wrong-length payload', () => {
+test('rejects a payload that is not 34 bytes', () => {
   // Create a payload that's not 34 bytes
   const ed25519Multicodec = Buffer.from([0xed, 0x01]);
   const shortKey = Buffer.alloc(31); // Too short, should be 32 bytes
@@ -54,4 +54,34 @@ test('rejects a 34-byte-prefixed but wrong-length payload', () => {
 
 test('rejects an invalid base58 character', () => {
   assert.throws(() => decodeDidKey('did:key:z0OIl'), /base58/);
+});
+
+test('encodeDidKey rejects a key that is not 32 bytes', () => {
+  assert.throws(() => encodeDidKey(Buffer.alloc(31)), /32-byte/);
+});
+
+test('base58 round-trips against known vectors', () => {
+  const vectors = [
+    { bytes: [0], base58: '1' },
+    { bytes: [0, 0], base58: '11' },
+    { bytes: [0, 0, 1], base58: '112' },
+    { bytes: [1], base58: '2' },
+    { bytes: [57], base58: 'z' },
+    { bytes: [58], base58: '21' },
+    { bytes: [0, 0, 0, 0], base58: '1111' },
+    { bytes: [255], base58: '5Q' },
+    { bytes: [0, 255], base58: '15Q' },
+  ];
+
+  for (const { bytes, base58 } of vectors) {
+    const buf = Buffer.from(bytes);
+    // Test encoding
+    assert.equal(base58Encode(buf), base58, `encode [${bytes}]`);
+    // Test decoding
+    assert.deepEqual(
+      Array.from(base58Decode(base58)),
+      bytes,
+      `decode "${base58}"`,
+    );
+  }
 });

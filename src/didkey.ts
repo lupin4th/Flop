@@ -4,7 +4,7 @@ const ED25519_MULTICODEC = Buffer.from([0xed, 0x01]);
 const PREFIX = 'did:key:';
 
 export function base58Decode(s: string): Buffer {
-  const bytes: number[] = [0];
+  const bytes: number[] = [];
   for (const ch of s) {
     const v = ALPHABET.indexOf(ch);
     if (v < 0) throw new Error(`invalid base58 character: ${ch}`);
@@ -24,7 +24,7 @@ export function base58Decode(s: string): Buffer {
 }
 
 export function base58Encode(buf: Buffer): string {
-  const digits: number[] = [0];
+  const digits: number[] = [];
   for (const byte of buf) {
     let carry = byte;
     for (let i = 0; i < digits.length; i++) {
