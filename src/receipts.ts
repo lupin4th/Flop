@@ -1,4 +1,4 @@
-import { appendFileSync, readFileSync, existsSync } from 'node:fs';
+import { appendFileSync, readFileSync, existsSync, statSync, openSync, readSync, closeSync } from 'node:fs';
 import type { KeyObject } from 'node:crypto';
 import { sanitize } from './sanitize.js';
 import { signPayload, verifyPayload } from './verify.js';
@@ -87,7 +87,21 @@ export function createReceipt(
 
 export function appendReceipt(r: Receipt): void {
   ensureHome();
-  appendFileSync(receiptsPath(), JSON.stringify(r) + '\n', { mode: 0o600 });
+  const path = receiptsPath();
+  if (existsSync(path)) {
+    const { size } = statSync(path);
+    if (size > 0) {
+      const fd = openSync(path, 'r');
+      try {
+        const tail = Buffer.alloc(1);
+        readSync(fd, tail, 0, 1, size - 1);
+        if (tail[0] !== 0x0a) appendFileSync(path, '\n');
+      } finally {
+        closeSync(fd);
+      }
+    }
+  }
+  appendFileSync(path, JSON.stringify(r) + '\n', { mode: 0o600 });
 }
 
 function isReceipt(value: unknown): value is Receipt {

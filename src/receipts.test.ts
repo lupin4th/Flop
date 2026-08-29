@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, appendFileSync } from 'node:fs';
+import { mkdtempSync, appendFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { generateIdentity } from './keystore.js';
@@ -173,4 +173,68 @@ test('empty receipt log and blank lines return zero receipts and zero malformed'
   const result = readReceiptLog();
   assert.equal(result.receipts.length, 0);
   assert.equal(result.malformed, 0);
+});
+
+test('appendReceipt recovers after a newline-less fragment: both receipts survive', () => {
+  isolate();
+  const { did, privateKey } = generateIdentity();
+  const a = createReceipt(privateKey, did, 'lobby', 'one', BASE, []);
+  appendReceipt(a);
+  // Simulate an interrupted write: append a fragment with no trailing newline
+  appendFileSync(receiptsPath(), '{"v":1,"did":"did:key:z', { mode: 0o600 });
+  // Now append a valid receipt; appendReceipt should start on a new line
+  const b = createReceipt(privateKey, did, 'lobby', 'two', BASE, [a]);
+  appendReceipt(b);
+  const { receipts, malformed } = readReceiptLog();
+  assert.equal(receipts.length, 2);
+  assert.equal(malformed, 1);
+  assert.equal(receipts[0].sanitized_text, 'one');
+  assert.equal(receipts[1].sanitized_text, 'two');
+  assert.equal(receipts.every(verifyReceipt), true);
+});
+
+test('after newline-less fragment, the fragment and new receipt are on separate lines', () => {
+  isolate();
+  const { did, privateKey } = generateIdentity();
+  const a = createReceipt(privateKey, did, 'lobby', 'one', BASE, []);
+  appendReceipt(a);
+  // Simulate an interrupted write: append a fragment with no trailing newline
+  appendFileSync(receiptsPath(), '{"v":1,"did":"did:key:z', { mode: 0o600 });
+  // Now append a valid receipt
+  const b = createReceipt(privateKey, did, 'lobby', 'two', BASE, [a]);
+  appendReceipt(b);
+  // Read the raw file and verify that no single line contains two {"v":1 occurrences
+  const content = readFileSync(receiptsPath(), 'utf8');
+  const lines = content.split('\n').filter((line) => line.trim() !== '');
+  let foundTwoVersions = false;
+  for (const line of lines) {
+    const count = (line.match(/\{"v":1/g) || []).length;
+    if (count > 1) foundTwoVersions = true;
+  }
+  assert.equal(foundTwoVersions, false);
+});
+
+test('appending to a file already ending with newline does not insert blank lines', () => {
+  isolate();
+  const { did, privateKey } = generateIdentity();
+  const a = createReceipt(privateKey, did, 'lobby', 'one', BASE, []);
+  appendReceipt(a);
+  const b = createReceipt(privateKey, did, 'lobby', 'two', BASE, [a]);
+  appendReceipt(b);
+  const content = readFileSync(receiptsPath(), 'utf8');
+  const lines = content.split('\n').filter((line) => line.trim() !== '');
+  assert.equal(lines.length, 2);
+  const { malformed } = readReceiptLog();
+  assert.equal(malformed, 0);
+});
+
+test('appendReceipt on a non-existent file creates it and produces one line', () => {
+  isolate();
+  const { did, privateKey } = generateIdentity();
+  const r = createReceipt(privateKey, did, 'lobby', 'hello', BASE, []);
+  appendReceipt(r);
+  const loaded = loadReceipts();
+  assert.equal(loaded.length, 1);
+  assert.equal(loaded[0].sanitized_text, 'hello');
+  assert.equal(verifyReceipt(loaded[0]), true);
 });
