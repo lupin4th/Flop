@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseRoomResponse, fetchRoom } from './client.js';
+import { parseRoomResponse, fetchRoom, fetchLatestSeq } from './client.js';
 
 test('parses well-formed messages', () => {
   const msgs = parseRoomResponse({
@@ -155,4 +155,71 @@ test('fetchRoom accepts legitimate dotted room names', async () => {
   });
   assert.match(seen, /\/r\/room\.v2\?/);
   assert.equal(msgs.length, 0);
+});
+
+test('fetchRoom adds wait to the query string when set', async () => {
+  let seen = '';
+  const fakeFetch = async (url: string | URL) => {
+    seen = String(url);
+    return new Response(JSON.stringify({ messages: [] }), { status: 200 });
+  };
+  await fetchRoom('lobby', { wait: 10, fetchImpl: fakeFetch as unknown as typeof fetch });
+  assert.match(seen, /wait=10/);
+});
+
+test('fetchRoom omits wait from the query string when unset', async () => {
+  let seen = '';
+  const fakeFetch = async (url: string | URL) => {
+    seen = String(url);
+    return new Response(JSON.stringify({ messages: [] }), { status: 200 });
+  };
+  await fetchRoom('lobby', { fetchImpl: fakeFetch as unknown as typeof fetch });
+  assert.equal(/wait=/.test(seen), false);
+});
+
+test('fetchRoom clamps wait above 10 down to 10', async () => {
+  let seen = '';
+  const fakeFetch = async (url: string | URL) => {
+    seen = String(url);
+    return new Response(JSON.stringify({ messages: [] }), { status: 200 });
+  };
+  await fetchRoom('lobby', { wait: 999, fetchImpl: fakeFetch as unknown as typeof fetch });
+  assert.match(seen, /wait=10/);
+});
+
+test('fetchRoom clamps a negative wait up to 0', async () => {
+  let seen = '';
+  const fakeFetch = async (url: string | URL) => {
+    seen = String(url);
+    return new Response(JSON.stringify({ messages: [] }), { status: 200 });
+  };
+  await fetchRoom('lobby', { wait: -5, fetchImpl: fakeFetch as unknown as typeof fetch });
+  assert.match(seen, /wait=0/);
+});
+
+test('fetchLatestSeq returns the highest seq in the room', async () => {
+  const fakeFetch = async () =>
+    new Response(
+      JSON.stringify({ messages: [{ seq: 42, ts: '1', from: '~a', text: 'hi' }] }),
+      { status: 200 },
+    );
+  const seq = await fetchLatestSeq('lobby', { fetchImpl: fakeFetch as unknown as typeof fetch });
+  assert.equal(seq, 42);
+});
+
+test('fetchLatestSeq requests limit=1', async () => {
+  let seen = '';
+  const fakeFetch = async (url: string | URL) => {
+    seen = String(url);
+    return new Response(JSON.stringify({ messages: [] }), { status: 200 });
+  };
+  await fetchLatestSeq('lobby', { fetchImpl: fakeFetch as unknown as typeof fetch });
+  assert.match(seen, /limit=1\b/);
+});
+
+test('fetchLatestSeq returns 0 for an empty room', async () => {
+  const fakeFetch = async () =>
+    new Response(JSON.stringify({ messages: [] }), { status: 200 });
+  const seq = await fetchLatestSeq('lobby', { fetchImpl: fakeFetch as unknown as typeof fetch });
+  assert.equal(seq, 0);
 });

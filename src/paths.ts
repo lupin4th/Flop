@@ -15,6 +15,10 @@ export function receiptsPath(): string {
   return join(attestHome(), 'receipts.jsonl');
 }
 
+export function confirmationsPath(): string {
+  return join(attestHome(), 'confirmations.jsonl');
+}
+
 export function archiveDir(room: string): string {
   assertSafeRoom(room);
   const root = resolve(join(attestHome(), 'archive'));

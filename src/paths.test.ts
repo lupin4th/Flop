@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, statSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
-import { attestHome, keyPath, receiptsPath, archiveDir, ensureHome } from './paths.js';
+import {
+  attestHome, keyPath, receiptsPath, archiveDir, ensureHome, confirmationsPath,
+} from './paths.js';
 
 test('defaults to ~/.technocore-attest', () => {
   delete process.env.TECHNOCORE_ATTEST_HOME;
@@ -16,6 +18,7 @@ test('TECHNOCORE_ATTEST_HOME overrides the default', () => {
   assert.equal(keyPath(), join('/tmp/x', 'key.json'));
   assert.equal(receiptsPath(), join('/tmp/x', 'receipts.jsonl'));
   assert.equal(archiveDir('lobby'), join('/tmp/x', 'archive', 'lobby'));
+  assert.equal(confirmationsPath(), join('/tmp/x', 'confirmations.jsonl'));
   delete process.env.TECHNOCORE_ATTEST_HOME;
 });
 

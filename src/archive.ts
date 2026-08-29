@@ -2,8 +2,9 @@ import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { archiveDir, ensureHome } from './paths.js';
 import { fetchRoom, type RoomMessage } from './client.js';
-import { loadReceipts, verifyReceipt, type Receipt } from './receipts.js';
+import { loadReceipts, type Receipt } from './receipts.js';
 import { appendJsonLine, readJsonLines } from './jsonl.js';
+import { matchesReceipt } from './confirm.js';
 
 /**
  * The server discards the signature after checking it, so a reader cannot
@@ -16,13 +17,7 @@ export type ArchivedMessage = RoomMessage & { trust: Trust };
 
 export function labelMessage(m: RoomMessage, receipts: Receipt[]): Trust {
   if (!m.from.startsWith('did:key:')) return 'unsigned';
-  const mine = receipts.find(
-    (r) =>
-      r.did === m.from &&
-      r.nonce === m.nonce &&
-      r.sanitized_text === m.text &&
-      verifyReceipt(r),
-  );
+  const mine = receipts.find((r) => matchesReceipt(m, r));
   return mine ? 'self_verified' : 'server_attested';
 }
 

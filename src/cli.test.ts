@@ -98,6 +98,32 @@ test('receipts verify prints no warning and exits zero when the log is clean', a
   assert.doesNotMatch(h.lines.join('\n'), /malformed|could not be read/i);
 });
 
+test('confirm with no room argument prints usage and returns non-zero', async () => {
+  isolate();
+  const h = harness();
+  const code = await run(['confirm'], h.io);
+  assert.notEqual(code, 0);
+  assert.match(h.lines.join('\n'), /Usage/);
+});
+
+test('confirm rejects an unsafe room name before any fetch', async () => {
+  isolate();
+  const originalFetch = global.fetch;
+  let called = false;
+  global.fetch = (async () => {
+    called = true;
+    throw new Error('confirm must not fetch for an unsafe room name');
+  }) as unknown as typeof fetch;
+  try {
+    const h = harness();
+    const code = await run(['confirm', '../etc'], h.io);
+    assert.notEqual(code, 0);
+    assert.equal(called, false);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 test('sign rejects an unsafe room name before ever prompting for a passphrase', async () => {
   isolate();
   await run(['keygen'], harness(['pw', 'pw']).io);

@@ -9,8 +9,9 @@ import {
 } from './receipts.js';
 import { archiveRoom, loadArchive, type ArchivedMessage } from './archive.js';
 import { buildReport } from './report.js';
-import { DEFAULT_BASE } from './client.js';
+import { DEFAULT_BASE, fetchLatestSeq } from './client.js';
 import { assertSafeRoom } from './room.js';
+import { confirmRoom, loadConfirmations, unconfirmedReceipts } from './confirm.js';
 
 export type Io = {
   out: (s: string) => void;
@@ -22,6 +23,7 @@ const USAGE = `Usage:
   technocore-attest sign <room> <text>     sign a message and print its post URL
   technocore-attest receipts verify        re-verify every stored receipt offline
   technocore-attest archive <room>         snapshot a room before its ring buffer drops it
+  technocore-attest confirm <room>         watch a room and confirm the server served your unconfirmed messages
   technocore-attest report                 summarise receipts and archives
 
 This tool never sends a message for you. \`sign\` prints a URL; opening it is your call.
@@ -93,15 +95,49 @@ async function cmdArchive(io: Io, room: string): Promise<number> {
   return 0;
 }
 
+async function cmdConfirm(io: Io, room: string): Promise<number> {
+  try {
+    assertSafeRoom(room);
+  } catch (err) {
+    io.out(err instanceof Error ? err.message : String(err));
+    return 1;
+  }
+  const receipts = loadReceipts();
+  const { confirmations } = loadConfirmations();
+  const targets = unconfirmedReceipts(room, receipts, confirmations);
+  if (targets.length === 0) {
+    io.out(`No unconfirmed receipts for ${room}.`);
+    return 0;
+  }
+  const watermark = await fetchLatestSeq(room, { base: DEFAULT_BASE });
+  io.out(`Watching ${room} from seq ${watermark}.`);
+  io.out('Open your post URL now.');
+  const { found, timedOut } = await confirmRoom(room, receipts, { base: DEFAULT_BASE });
+  for (const c of found) {
+    io.out(`Confirmed nonce ${c.nonce} at seq ${c.seq}`);
+  }
+  if (timedOut) {
+    const { confirmations: after } = loadConfirmations();
+    const stillUnconfirmed = unconfirmedReceipts(room, receipts, after);
+    io.out(`Timed out waiting for the server. Still unconfirmed (${stillUnconfirmed.length}):`);
+    for (const r of stillUnconfirmed) {
+      io.out(`  nonce ${r.nonce}`);
+    }
+    return 1;
+  }
+  return 0;
+}
+
 function cmdReport(io: Io): number {
   const { receipts, malformed } = readReceiptLog();
+  const { confirmations } = loadConfirmations();
   const rooms = [...new Set(receipts.map((r) => r.room))];
   const archives: Record<string, ArchivedMessage[]> = {};
   for (const room of rooms) {
     const rows = loadArchive(room);
     if (rows.length) archives[room] = rows;
   }
-  io.out(buildReport(receipts, archives, malformed));
+  io.out(buildReport(receipts, archives, malformed, confirmations));
   return 0;
 }
 
@@ -128,6 +164,12 @@ export async function run(argv: string[], io: Io): Promise<number> {
         return 1;
       }
       return cmdArchive(io, rest[0]);
+    case 'confirm':
+      if (rest.length < 1) {
+        io.out(USAGE);
+        return 1;
+      }
+      return cmdConfirm(io, rest[0]);
     case 'report':
       return cmdReport(io);
     default:

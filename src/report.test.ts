@@ -7,6 +7,7 @@ import { generateIdentity } from './keystore.js';
 import { createReceipt } from './receipts.js';
 import { buildReport } from './report.js';
 import type { ArchivedMessage } from './archive.js';
+import type { Confirmation } from './confirm.js';
 
 function isolate() {
   process.env.TECHNOCORE_ATTEST_HOME = mkdtempSync(join(tmpdir(), 'attest-'));
@@ -75,4 +76,32 @@ test('two-argument form still works', () => {
   const out = buildReport([], archives);
   assert.match(out, /lobby/);
   assert.equal(out.includes('WARNING'), false);
+});
+
+test('three-argument form still works', () => {
+  const out = buildReport([], {}, 3);
+  assert.match(out, /WARNING/);
+  assert.match(out, /3 line\(s\)/);
+});
+
+test('per-did line reports signed and confirmed counts separately', () => {
+  isolate();
+  const { did, privateKey } = generateIdentity();
+  const r1 = createReceipt(privateKey, did, 'lobby', 'one', 'https://x', []);
+  const r2 = createReceipt(privateKey, did, 'lobby', 'two', 'https://x', [r1]);
+  const confirmations: Confirmation[] = [
+    {
+      v: 1, did: r1.did, room: r1.room, nonce: r1.nonce, sig: r1.sig,
+      seq: 9, server_ts: 't', confirmed_at: 'now',
+    },
+  ];
+  const out = buildReport([r1, r2], {}, 0, confirmations);
+  assert.match(out, /2 signed, 1 confirmed on server, across lobby/);
+});
+
+test('the closing note explains that a confirmation is weaker evidence than a receipt', () => {
+  const out = buildReport([], {}, 0, []);
+  assert.match(out, /seq/);
+  assert.match(out, /not signed/);
+  assert.match(out, /weaker/);
 });
