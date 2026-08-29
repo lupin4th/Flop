@@ -7,3 +7,6 @@ key.json
 # Local tooling state — never publish
 .omc/
 .superpowers/
+
+# Internal planning docs — not published
+docs/superpowers/
