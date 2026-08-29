@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
 import { encodeDidKey } from './didkey.js';
-import { signingPayload, signPayload, verifyPayload } from './verify.js';
+import { signingPayload, publicKeyFromDid, signPayload, verifyPayload } from './verify.js';
 
 function freshIdentity() {
   const { publicKey, privateKey } = generateKeyPairSync('ed25519');
@@ -45,4 +45,50 @@ test('a signature does not verify against a different did', () => {
 test('a malformed signature returns false rather than throwing', () => {
   const { did } = freshIdentity();
   assert.equal(verifyPayload(did, 'lobby', 1, 'hi', 'not-a-signature'), false);
+});
+
+test('signingPayload rejects NaN as nonce', () => {
+  assert.throws(
+    () => signingPayload('lobby', NaN, 'hi'),
+    /nonce must be a non-negative safe integer/,
+  );
+});
+
+test('signingPayload rejects non-integer nonce', () => {
+  assert.throws(
+    () => signingPayload('lobby', 1.5, 'hi'),
+    /nonce must be a non-negative safe integer/,
+  );
+});
+
+test('signingPayload rejects Infinity as nonce', () => {
+  assert.throws(
+    () => signingPayload('lobby', Infinity, 'hi'),
+    /nonce must be a non-negative safe integer/,
+  );
+});
+
+test('signingPayload rejects negative nonce', () => {
+  assert.throws(
+    () => signingPayload('lobby', -1, 'hi'),
+    /nonce must be a non-negative safe integer/,
+  );
+});
+
+test('signingPayload accepts zero as nonce', () => {
+  assert.equal(signingPayload('lobby', 0, 'hi').toString('utf8'), 'lobby|0|hi');
+});
+
+test('verifyPayload returns false when given NaN as nonce', () => {
+  const { did } = freshIdentity();
+  assert.equal(verifyPayload(did, 'lobby', NaN, 'hi', 'not-a-signature'), false);
+});
+
+test('publicKeyFromDid reconstructs SPKI DER correctly', () => {
+  const { publicKey } = generateKeyPairSync('ed25519');
+  const spki = publicKey.export({ type: 'spki', format: 'der' }) as Buffer;
+  const did = encodeDidKey(spki.subarray(12));
+  const reconstructed = publicKeyFromDid(did);
+  const reconstructedSpki = reconstructed.export({ type: 'spki', format: 'der' }) as Buffer;
+  assert.deepEqual(reconstructedSpki, spki);
 });

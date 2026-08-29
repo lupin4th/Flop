@@ -14,6 +14,9 @@ export function signingPayload(
   nonce: number,
   sanitizedText: string,
 ): Buffer {
+  if (!Number.isSafeInteger(nonce) || nonce < 0) {
+    throw new Error(`nonce must be a non-negative safe integer, got ${nonce}`);
+  }
   return Buffer.from(`${room}|${nonce}|${sanitizedText}`, 'utf8');
 }
 
