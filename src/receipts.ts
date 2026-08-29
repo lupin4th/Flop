@@ -1,8 +1,8 @@
-import { appendFileSync, readFileSync, existsSync, statSync, openSync, readSync, closeSync } from 'node:fs';
 import type { KeyObject } from 'node:crypto';
 import { sanitize } from './sanitize.js';
 import { signPayload, verifyPayload } from './verify.js';
 import { receiptsPath, ensureHome } from './paths.js';
+import { appendJsonLine, readJsonLines } from './jsonl.js';
 
 export type Receipt = {
   v: 1;
@@ -87,21 +87,7 @@ export function createReceipt(
 
 export function appendReceipt(r: Receipt): void {
   ensureHome();
-  const path = receiptsPath();
-  if (existsSync(path)) {
-    const { size } = statSync(path);
-    if (size > 0) {
-      const fd = openSync(path, 'r');
-      try {
-        const tail = Buffer.alloc(1);
-        readSync(fd, tail, 0, 1, size - 1);
-        if (tail[0] !== 0x0a) appendFileSync(path, '\n');
-      } finally {
-        closeSync(fd);
-      }
-    }
-  }
-  appendFileSync(path, JSON.stringify(r) + '\n', { mode: 0o600 });
+  appendJsonLine(receiptsPath(), r, { mode: 0o600 });
 }
 
 function isReceipt(value: unknown): value is Receipt {
@@ -120,22 +106,8 @@ function isReceipt(value: unknown): value is Receipt {
 }
 
 export function readReceiptLog(): { receipts: Receipt[]; malformed: number } {
-  if (!existsSync(receiptsPath())) return { receipts: [], malformed: 0 };
-  const receipts: Receipt[] = [];
-  let malformed = 0;
-  for (const line of readFileSync(receiptsPath(), 'utf8').split('\n')) {
-    if (line.trim() === '') continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      malformed++;
-      continue;
-    }
-    if (isReceipt(parsed)) receipts.push(parsed);
-    else malformed++;
-  }
-  return { receipts, malformed };
+  const { records, malformed } = readJsonLines(receiptsPath(), isReceipt);
+  return { receipts: records, malformed };
 }
 
 export function loadReceipts(): Receipt[] {

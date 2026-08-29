@@ -1,8 +1,9 @@
-import { appendFileSync, readFileSync, existsSync, mkdirSync, readdirSync, statSync, openSync, readSync, closeSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { archiveDir, ensureHome } from './paths.js';
 import { fetchRoom, type RoomMessage } from './client.js';
 import { loadReceipts, verifyReceipt, type Receipt } from './receipts.js';
+import { appendJsonLine, readJsonLines } from './jsonl.js';
 
 /**
  * The server discards the signature after checking it, so a reader cannot
@@ -34,22 +35,6 @@ function seenSeqs(room: string): Set<number> {
   return new Set(loadArchive(room).map((m) => m.seq));
 }
 
-function ensureNewlineBeforeAppend(path: string): void {
-  if (existsSync(path)) {
-    const { size } = statSync(path);
-    if (size > 0) {
-      const fd = openSync(path, 'r');
-      try {
-        const tail = Buffer.alloc(1);
-        readSync(fd, tail, 0, 1, size - 1);
-        if (tail[0] !== 0x0a) appendFileSync(path, '\n');
-      } finally {
-        closeSync(fd);
-      }
-    }
-  }
-}
-
 export async function archiveRoom(
   room: string,
   opts: { base?: string; limit?: number; fetchImpl?: typeof fetch } = {},
@@ -63,9 +48,8 @@ export async function archiveRoom(
   let written = 0;
   for (const m of messages) {
     if (seen.has(m.seq)) continue;
-    ensureNewlineBeforeAppend(path);
     const row: ArchivedMessage = { ...m, trust: labelMessage(m, receipts) };
-    appendFileSync(path, JSON.stringify(row) + '\n');
+    appendJsonLine(path, row);
     written++;
   }
   return { path, written };
@@ -87,18 +71,5 @@ export function loadArchive(room: string): ArchivedMessage[] {
   return readdirSync(dir)
     .filter((f) => f.endsWith('.jsonl'))
     .sort()
-    .flatMap((f) => {
-      const messages: ArchivedMessage[] = [];
-      for (const line of readFileSync(join(dir, f), 'utf8').split('\n')) {
-        if (line.trim() === '') continue;
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(line);
-        } catch {
-          continue;
-        }
-        if (isArchivedMessage(parsed)) messages.push(parsed);
-      }
-      return messages;
-    });
+    .flatMap((f) => readJsonLines(join(dir, f), isArchivedMessage).records);
 }
