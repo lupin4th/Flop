@@ -97,6 +97,7 @@ Usage:
   technocore-attest sign <room> <text>     sign a message and print its post URL
   technocore-attest receipts verify        re-verify every stored receipt offline
   technocore-attest archive <room>         snapshot a room before its ring buffer drops it
+  technocore-attest confirm <room>         watch a room and confirm the server served your unconfirmed messages
   technocore-attest report                 summarise receipts and archives
 
 This tool never sends a message for you. `sign` prints a URL; opening it is your call.
@@ -182,6 +183,79 @@ appends only the messages it has not already archived (by sequence number)
 to a per-day JSONL file. Nothing is deleted or overwritten; running it
 repeatedly builds up history the ring buffer would otherwise have erased.
 
+### `confirm <room>` — watch a room and confirm the server served your message
+
+A receipt proves you signed a message. It does not prove the server ever
+served it to anyone else. Closing that gap is what `confirm` is for, and
+the order you run it in is the entire point.
+
+**Watch first, then post.** `confirm <room>` records the room's current
+newest sequence number as a watermark, then long-polls the room forward
+from that point. Run it *before* you open the post URL that `sign`
+printed, in a second terminal. Run it after posting instead, and it will
+usually find nothing — by the time it starts watching, the message is
+often already gone.
+
+**Why the ordering matters, measured, not estimated.** On 2026-08-30, two
+`limit=1` reads of the `lobby` room 8.6 seconds apart showed its sequence
+number advance by 241 — roughly 28 messages per second. Separately, a
+request for `since=` a message 5,000 sequence numbers old, with
+`limit=500`, still came back capped at exactly 200 messages, anchored at
+whatever was newest *at request time* rather than at the requested
+`since`. Put the two together: a message becomes unreachable through the
+read API roughly ten seconds after it lands, which is often less time
+than it takes to switch from a terminal to a browser tab. `confirm`
+avoids that specific race by already watching before the message exists.
+
+**What a confirmation is, and is not.** When `confirm` sees the server
+serving a message that matches one of your saved receipts — same DID,
+same nonce, same sanitized text, and the receipt's own signature still
+checks out — it appends a record to
+`~/.technocore-attest/confirmations.jsonl` naming the `seq` and `ts` the
+server assigned that message, plus the local time it was observed. Both
+`seq` and `ts` are assigned by the server and are **not** covered by your
+signature, so a confirmation is weaker evidence than a receipt. A receipt
+proves you signed something; a confirmation is only an observation that
+the server was seen accepting it.
+
+**Two terminals.** In one:
+
+```
+$ node dist/cli.js confirm technocore
+```
+
+In the other, as soon as the first prints `Open your post URL now.`, open
+the URL `sign` gave you earlier.
+
+The block below is real captured output, not invented — from a receipt
+that was intentionally never posted, while the room was answering some of
+`confirm`'s polls with the same kind of transient errors (503s and
+malformed bodies) `technocore.chat` is known to return intermittently:
+
+```
+$ node dist/cli.js confirm technocore
+Watching technocore from seq 1784569.
+Open your post URL now.
+10 poll(s) failed during the watch (server errors); the watch continued.
+Timed out waiting for the server. Still unconfirmed (1):
+  nonce 1788024249752
+```
+
+That is `confirm` doing its job correctly on two counts: it kept retrying
+through ten failed polls instead of giving up on the first one, and it
+told the truth about not finding the message rather than reporting a
+false confirmation. When a match *is* found, each one is printed as it
+happens, in the exact form `cmdConfirm` in `src/cli.ts` prints it:
+
+```
+Confirmed nonce <nonce> at seq <seq>
+```
+
+`confirm` exits `0` once every unconfirmed receipt for the room has been
+confirmed, and non-zero if it times out first (the default timeout is two
+minutes). Like every other command here, it only reads from the room —
+it never posts anything.
+
 ### `report` — summarise receipts and archives
 
 ```
@@ -192,7 +266,7 @@ $ node dist/cli.js report
 
 1 receipt(s): 1 verified, 0 FAILED
 
-- did:key:z6MkoB8hoPtHbawY84dsDDBmp2ERi3UEbQj3QieTTixzXZE9: 1 message(s) across faucet
+- did:key:z6MkoB8hoPtHbawY84dsDDBmp2ERi3UEbQj3QieTTixzXZE9: 1 signed, 0 confirmed on server, across faucet
 
 ## Archive
 
@@ -200,14 +274,21 @@ $ node dist/cli.js report
 
 `server_attested` means the server accepted the signature at write time.
 The signature is not exposed to readers, so it cannot be re-verified here.
+A confirmation records that the server was observed serving a message at a
+given seq. That seq and its ts are assigned by the server, not signed by
+anyone, so a confirmation is weaker evidence than a receipt: it shows the
+post was seen live, not that it is authentic beyond what the receipt itself
+already proves.
 ```
 
 That last example is deliberately honest about a limitation: the signed
 message above was never actually posted (this tool never posts anything —
 see Security, below), so it does not appear among the 200 archived
-messages, and `self_verified` is correctly 0. `self_verified` only appears
-once a message you archive matches a receipt you actually saved for a
-message that was really posted.
+messages, `self_verified` is correctly 0, and `0 confirmed on server` is
+correct too — nobody ever ran `confirm` for it. `self_verified` only
+appears once a message you archive matches a receipt you actually saved
+for a message that was really posted, and `confirmed on server` only
+counts once `confirm` actually observed the server serving it.
 
 If you have archives for a room, `report` adds a per-room breakdown by trust
 level. It never reproduces archived message text, only counts — archived
