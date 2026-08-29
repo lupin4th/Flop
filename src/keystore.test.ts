@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, statSync, readFileSync } from 'node:fs';
+import { mkdtempSync, statSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { generateIdentity, saveIdentity, loadIdentity, identityExists } from './keystore.js';
@@ -59,4 +59,52 @@ test('identityExists reflects whether a key file is present', () => {
   const { did, privateKey } = generateIdentity();
   saveIdentity(privateKey, did, 'pw');
   assert.equal(identityExists(), true);
+});
+
+test('saveIdentity throws when given a did from a different key', () => {
+  isolate();
+  const { did: did1, privateKey: key1 } = generateIdentity();
+  const { did: did2 } = generateIdentity();
+  assert.throws(() => saveIdentity(key1, did2, 'pw'), /does not match/);
+});
+
+test('loadIdentity throws when the stored did is edited to a different identity', () => {
+  isolate();
+  const { did, privateKey } = generateIdentity();
+  const { did: wrongDid } = generateIdentity();
+  saveIdentity(privateKey, did, 'pw');
+  const raw = readFileSync(keyPath(), 'utf8');
+  const edited = raw.replace(`"did": "${did}"`, `"did": "${wrongDid}"`);
+  writeFileSync(keyPath(), edited, { mode: 0o600 });
+  assert.throws(() => loadIdentity('pw'), /inconsistent/);
+});
+
+test('KDF parameters from file are used and validated on load', () => {
+  isolate();
+  const { did, privateKey } = generateIdentity();
+  saveIdentity(privateKey, did, 'pw');
+  const loaded = loadIdentity('pw');
+  assert.equal(loaded.did, did);
+  const sig = signPayload(loaded.privateKey, 'lobby', 1, 'hi');
+  assert.equal(verifyPayload(did, 'lobby', 1, 'hi', sig), true);
+});
+
+test('loadIdentity throws on N=0 in KDF parameters', () => {
+  isolate();
+  const { did, privateKey } = generateIdentity();
+  saveIdentity(privateKey, did, 'pw');
+  const raw = readFileSync(keyPath(), 'utf8');
+  const edited = raw.replace('"N": 32768', '"N": 0');
+  writeFileSync(keyPath(), edited, { mode: 0o600 });
+  assert.throws(() => loadIdentity('pw'), /KDF parameters/);
+});
+
+test('loadIdentity throws on N=2^25 in KDF parameters', () => {
+  isolate();
+  const { did, privateKey } = generateIdentity();
+  saveIdentity(privateKey, did, 'pw');
+  const raw = readFileSync(keyPath(), 'utf8');
+  const edited = raw.replace('"N": 32768', `"N": ${1 << 25}`);
+  writeFileSync(keyPath(), edited, { mode: 0o600 });
+  assert.throws(() => loadIdentity('pw'), /KDF parameters/);
 });
