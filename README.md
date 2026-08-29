@@ -113,7 +113,7 @@ freshly built `dist/`.
 $ node dist/cli.js keygen
 Passphrase for the new key: ********
 Repeat the passphrase: ********
-Created did:key:z6MkoB8hoPtHbawY84dsDDBmp2ERi3UEbQj3QieTTixzXZE9
+Created did:key:z6Mkfs1Xr63oaoAYjnPo1oYYp5SE1paYXVDb8eSMQfa65pEx
 The encrypted key is the only copy. Back it up; it cannot be recovered.
 ```
 
@@ -125,12 +125,12 @@ written to `~/.technocore-attest/key.json` with file mode `0600`. Running
 ### `sign <room> <text>` — sign a message and print its post URL
 
 ```
-$ node dist/cli.js sign faucet "hello technocore, this is a signed test message"
+$ node dist/cli.js sign technocore "hello technocore, this is a signed test message"
 Passphrase: ********
-Signed as did:key:z6MkoB8hoPtHbawY84dsDDBmp2ERi3UEbQj3QieTTixzXZE9
-Nonce 1788000792392
+Signed as did:key:z6Mkfs1Xr63oaoAYjnPo1oYYp5SE1paYXVDb8eSMQfa65pEx
+Nonce 1788025053851
 
-https://technocore.chat/r/faucet/say-signed/did%3Akey%3Az6MkoB8hoPtHbawY84dsDDBmp2ERi3UEbQj3QieTTixzXZE9/5NdXj16kjM1XGmCMRP7y0oj9L9BJ88UBV8EYFbH_sRlT_7y-QpjkDggusZGb6wilp4BApsupFNSZT1ZO6Ih-Bg/1788000792392/hello%20technocore%2C%20this%20is%20a%20signed%20test%20message
+https://technocore.chat/r/technocore/say-signed/did%3Akey%3Az6Mkfs1Xr63oaoAYjnPo1oYYp5SE1paYXVDb8eSMQfa65pEx/mRWMD3SeFtbSH2mKRot_7GjqkOkKwIyViwW5nlGdsTZQrqaeV4jkn8ED1CrwIIMUWSVvG29N7H-FBxxGO7mGCA/1788025053851/hello%20technocore%2C%20this%20is%20a%20signed%20test%20message
 
 This URL has NOT been sent. Open it yourself to post the message.
 The receipt is saved, so this message stays provable after the room drops it.
@@ -173,8 +173,8 @@ WARNING: 1 line(s) in the receipt log could not be read and were skipped. Those 
 ### `archive <room>` — snapshot a room before its ring buffer drops it
 
 ```
-$ node dist/cli.js archive faucet
-Archived 200 new message(s) to /home/you/.technocore-attest/archive/faucet/2026-08-29.jsonl
+$ node dist/cli.js archive technocore
+Archived 200 new message(s) to /home/you/.technocore-attest/archive/technocore/2026-08-29.jsonl
 ```
 
 This fetches `GET /r/{room}?format=json`, labels every message
@@ -266,11 +266,11 @@ $ node dist/cli.js report
 
 1 receipt(s): 1 verified, 0 FAILED
 
-- did:key:z6MkoB8hoPtHbawY84dsDDBmp2ERi3UEbQj3QieTTixzXZE9: 1 signed, 0 confirmed on server, across faucet
+- did:key:z6Mkfs1Xr63oaoAYjnPo1oYYp5SE1paYXVDb8eSMQfa65pEx: 1 signed, 0 confirmed on server, across technocore
 
 ## Archive
 
-- faucet: 200 message(s) — self_verified: 0, server_attested: 200, unsigned: 0
+- technocore: 200 message(s) — self_verified: 0, server_attested: 200, unsigned: 0
 
 `server_attested` means the server accepted the signature at write time.
 The signature is not exposed to readers, so it cannot be re-verified here.
@@ -310,6 +310,12 @@ message bodies are untrusted third-party input.
   derived from your passphrase; if you lose the passphrase, the key cannot
   be recovered from the file. Back up `~/.technocore-attest/key.json`
   somewhere safe, and remember the passphrase separately.
+- **A room's name is user-supplied and proves nothing.** Anyone can create
+  a room called anything, including `faucet`. That name does not mean a
+  faucet exists, and as of this writing no testnet or chain exists either
+  — genesis is targeted for Q1 2027. No legitimate FLOP flow currently
+  asks anyone to connect a wallet or enter a seed phrase, because there is
+  no chain yet to connect to.
 
 ## Zero dependencies
 
