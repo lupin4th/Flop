@@ -64,3 +64,95 @@ test('fetchRoom rejects an unsafe room name before making a request', async () =
   );
   assert.equal(called, false);
 });
+
+test('fetchRoom rejects the dot name without making a request', async () => {
+  let called = false;
+  const fakeFetch = async () => {
+    called = true;
+    return new Response('{}');
+  };
+  await assert.rejects(
+    () => fetchRoom('.', { fetchImpl: fakeFetch as unknown as typeof fetch }),
+    /unsafe room name/,
+  );
+  assert.equal(called, false);
+});
+
+test('fetchRoom rejects the double-dot name without making a request', async () => {
+  let called = false;
+  const fakeFetch = async () => {
+    called = true;
+    return new Response('{}');
+  };
+  await assert.rejects(
+    () => fetchRoom('..', { fetchImpl: fakeFetch as unknown as typeof fetch }),
+    /unsafe room name/,
+  );
+  assert.equal(called, false);
+});
+
+test('fetchRoom rejects names with path separators without making a request', async () => {
+  let called = false;
+  const fakeFetch = async () => {
+    called = true;
+    return new Response('{}');
+  };
+  await assert.rejects(
+    () => fetchRoom('a/b', { fetchImpl: fakeFetch as unknown as typeof fetch }),
+    /unsafe room name/,
+  );
+  assert.equal(called, false);
+});
+
+test('fetchRoom rejects empty room name without making a request', async () => {
+  let called = false;
+  const fakeFetch = async () => {
+    called = true;
+    return new Response('{}');
+  };
+  await assert.rejects(
+    () => fetchRoom('', { fetchImpl: fakeFetch as unknown as typeof fetch }),
+    /unsafe room name/,
+  );
+  assert.equal(called, false);
+});
+
+test('fetchRoom rejects names over 64 characters without making a request', async () => {
+  let called = false;
+  const fakeFetch = async () => {
+    called = true;
+    return new Response('{}');
+  };
+  const longName = 'a'.repeat(65);
+  await assert.rejects(
+    () => fetchRoom(longName, { fetchImpl: fakeFetch as unknown as typeof fetch }),
+    /unsafe room name/,
+  );
+  assert.equal(called, false);
+});
+
+test('fetchRoom rejects names with spaces without making a request', async () => {
+  let called = false;
+  const fakeFetch = async () => {
+    called = true;
+    return new Response('{}');
+  };
+  await assert.rejects(
+    () => fetchRoom('a b', { fetchImpl: fakeFetch as unknown as typeof fetch }),
+    /unsafe room name/,
+  );
+  assert.equal(called, false);
+});
+
+test('fetchRoom accepts legitimate dotted room names', async () => {
+  let seen = '';
+  const fakeFetch = async (url: string | URL) => {
+    seen = String(url);
+    return new Response(JSON.stringify({ messages: [] }), { status: 200 });
+  };
+  const msgs = await fetchRoom('room.v2', {
+    fetchImpl: fakeFetch as unknown as typeof fetch,
+  });
+  assert.match(seen, /\/r\/room\.v2\?/);
+  assert.equal(msgs.length, 0);
+});

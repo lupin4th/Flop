@@ -1,9 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
-
-/** Room names come from the network, so they never reach the filesystem raw. */
-const SAFE_ROOM = /^[A-Za-z0-9._-]{1,64}$/;
+import { assertSafeRoom } from './room.js';
 
 export function attestHome(): string {
   return process.env.TECHNOCORE_ATTEST_HOME ?? join(homedir(), '.technocore-attest');
@@ -18,12 +16,7 @@ export function receiptsPath(): string {
 }
 
 export function archiveDir(room: string): string {
-  if (!SAFE_ROOM.test(room)) {
-    throw new Error(`unsafe room name: ${JSON.stringify(room)}`);
-  }
-  if (room === '.' || room === '..') {
-    throw new Error(`unsafe room name: ${JSON.stringify(room)}`);
-  }
+  assertSafeRoom(room);
   const root = resolve(join(attestHome(), 'archive'));
   const dir = resolve(join(root, room));
   if (dir !== root && !dir.startsWith(root + sep)) {

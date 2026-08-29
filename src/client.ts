@@ -1,9 +1,9 @@
+import { assertSafeRoom } from './room.js';
+
 export const DEFAULT_BASE = 'https://technocore.chat';
 
 // Each invocation makes exactly one request, well inside the 120/min read
 // budget. There is nothing to pace, so there is no pacing code.
-
-const SAFE_ROOM = /^[A-Za-z0-9._-]{1,64}$/;
 
 export type RoomMessage = {
   seq: number;
@@ -43,9 +43,7 @@ export async function fetchRoom(
     fetchImpl?: typeof fetch;
   } = {},
 ): Promise<RoomMessage[]> {
-  if (!SAFE_ROOM.test(room)) {
-    throw new Error(`unsafe room name: ${JSON.stringify(room)}`);
-  }
+  assertSafeRoom(room);
   const base = opts.base ?? DEFAULT_BASE;
   const doFetch = opts.fetchImpl ?? fetch;
   const url = new URL(`${base}/r/${room}`);
