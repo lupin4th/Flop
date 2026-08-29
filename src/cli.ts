@@ -112,9 +112,12 @@ async function cmdConfirm(io: Io, room: string): Promise<number> {
   const watermark = await fetchLatestSeq(room, { base: DEFAULT_BASE });
   io.out(`Watching ${room} from seq ${watermark}.`);
   io.out('Open your post URL now.');
-  const { found, timedOut } = await confirmRoom(room, receipts, { base: DEFAULT_BASE });
+  const { found, timedOut, errors } = await confirmRoom(room, receipts, { base: DEFAULT_BASE });
   for (const c of found) {
     io.out(`Confirmed nonce ${c.nonce} at seq ${c.seq}`);
+  }
+  if (errors > 0) {
+    io.out(`${errors} poll(s) failed during the watch (server errors); the watch continued.`);
   }
   if (timedOut) {
     const { confirmations: after } = loadConfirmations();
