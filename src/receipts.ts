@@ -90,12 +90,42 @@ export function appendReceipt(r: Receipt): void {
   appendFileSync(receiptsPath(), JSON.stringify(r) + '\n', { mode: 0o600 });
 }
 
+function isReceipt(value: unknown): value is Receipt {
+  if (typeof value !== 'object' || value === null) return false;
+  const r = value as Record<string, unknown>;
+  return (
+    r.v === 1 &&
+    typeof r.did === 'string' &&
+    typeof r.room === 'string' &&
+    typeof r.nonce === 'number' &&
+    typeof r.sanitized_text === 'string' &&
+    typeof r.sig === 'string' &&
+    typeof r.url === 'string' &&
+    typeof r.local_ts === 'string'
+  );
+}
+
+export function readReceiptLog(): { receipts: Receipt[]; malformed: number } {
+  if (!existsSync(receiptsPath())) return { receipts: [], malformed: 0 };
+  const receipts: Receipt[] = [];
+  let malformed = 0;
+  for (const line of readFileSync(receiptsPath(), 'utf8').split('\n')) {
+    if (line.trim() === '') continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      malformed++;
+      continue;
+    }
+    if (isReceipt(parsed)) receipts.push(parsed);
+    else malformed++;
+  }
+  return { receipts, malformed };
+}
+
 export function loadReceipts(): Receipt[] {
-  if (!existsSync(receiptsPath())) return [];
-  return readFileSync(receiptsPath(), 'utf8')
-    .split('\n')
-    .filter((line) => line.trim() !== '')
-    .map((line) => JSON.parse(line) as Receipt);
+  return readReceiptLog().receipts;
 }
 
 export function verifyReceipt(r: Receipt): boolean {

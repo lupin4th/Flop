@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { generateIdentity } from './keystore.js';
 import {
-  nextNonce, buildPostUrl, createReceipt, appendReceipt, loadReceipts, verifyReceipt,
+  nextNonce, buildPostUrl, createReceipt, appendReceipt, loadReceipts, verifyReceipt, readReceiptLog,
   type Receipt,
 } from './receipts.js';
+import { receiptsPath, ensureHome } from './paths.js';
 
 const BASE = 'https://technocore.chat';
 
@@ -95,4 +96,81 @@ test('append then load round-trips receipts in order', () => {
   assert.equal(loaded[1].sanitized_text, 'two');
   assert.ok(loaded[1].nonce > loaded[0].nonce);
   assert.equal(loaded.every(verifyReceipt), true);
+});
+
+test('loadReceipts skips a truncated line and returns both prior receipts', () => {
+  isolate();
+  const { did, privateKey } = generateIdentity();
+  const a = createReceipt(privateKey, did, 'lobby', 'one', BASE, []);
+  appendReceipt(a);
+  const b = createReceipt(privateKey, did, 'lobby', 'two', BASE, [a]);
+  appendReceipt(b);
+  // Append a truncated JSON line that will fail to parse
+  appendFileSync(receiptsPath(), '{"v":1,"did":"did:key:z', { mode: 0o600 });
+  const loaded = loadReceipts();
+  assert.equal(loaded.length, 2);
+  assert.equal(loaded[0].sanitized_text, 'one');
+  assert.equal(loaded[1].sanitized_text, 'two');
+  const { malformed } = readReceiptLog();
+  assert.equal(malformed, 1);
+});
+
+test('loadReceipts recovers after a truncated line in the middle', () => {
+  isolate();
+  const { did, privateKey } = generateIdentity();
+  const a = createReceipt(privateKey, did, 'lobby', 'one', BASE, []);
+  appendReceipt(a);
+  // Append a truncated line
+  appendFileSync(receiptsPath(), '{"v":1,"did":"did:key:z\n', { mode: 0o600 });
+  const b = createReceipt(privateKey, did, 'lobby', 'two', BASE, [a]);
+  appendReceipt(b);
+  const loaded = loadReceipts();
+  assert.equal(loaded.length, 2);
+  assert.equal(loaded[0].sanitized_text, 'one');
+  assert.equal(loaded[1].sanitized_text, 'two');
+  const { malformed } = readReceiptLog();
+  assert.equal(malformed, 1);
+});
+
+test('loadReceipts skips valid JSON that is not a receipt object', () => {
+  isolate();
+  const { did, privateKey } = generateIdentity();
+  const a = createReceipt(privateKey, did, 'lobby', 'one', BASE, []);
+  appendReceipt(a);
+  appendFileSync(receiptsPath(), '{"hello":"world"}\n', { mode: 0o600 });
+  appendFileSync(receiptsPath(), '[1,2,3]\n', { mode: 0o600 });
+  const b = createReceipt(privateKey, did, 'lobby', 'two', BASE, [a]);
+  appendReceipt(b);
+  const loaded = loadReceipts();
+  assert.equal(loaded.length, 2);
+  assert.equal(loaded[0].sanitized_text, 'one');
+  assert.equal(loaded[1].sanitized_text, 'two');
+  const { malformed } = readReceiptLog();
+  assert.equal(malformed, 2);
+});
+
+test('nextNonce works with loadReceipts even after a truncated line exists', () => {
+  isolate();
+  const { did, privateKey } = generateIdentity();
+  const a = createReceipt(privateKey, did, 'lobby', 'one', BASE, []);
+  appendReceipt(a);
+  // Append a truncated line
+  appendFileSync(receiptsPath(), '{"v":1,"did":"did:key:z\n', { mode: 0o600 });
+  // Create a new receipt using nextNonce with the recovered receipts
+  const loaded = loadReceipts();
+  const nonce = nextNonce('lobby', loaded);
+  assert.ok(nonce > a.nonce);
+  // Verify that we can still create a receipt
+  const b = createReceipt(privateKey, did, 'lobby', 'two', BASE, loaded);
+  assert.ok(b.nonce > a.nonce);
+});
+
+test('empty receipt log and blank lines return zero receipts and zero malformed', () => {
+  isolate();
+  ensureHome();
+  // Create a file with only blank lines
+  appendFileSync(receiptsPath(), '\n\n  \n', { mode: 0o600 });
+  const result = readReceiptLog();
+  assert.equal(result.receipts.length, 0);
+  assert.equal(result.malformed, 0);
 });
