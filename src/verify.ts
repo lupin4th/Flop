@@ -9,15 +9,34 @@ import { decodeDidKey } from './didkey.js';
 /** DER header for an Ed25519 SubjectPublicKeyInfo; the 32-byte key follows. */
 const SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 
+/**
+ * Renders a nonce to the exact decimal text that goes into the signing
+ * payload. A `number` must be a safe integer, since anything past
+ * `Number.MAX_SAFE_INTEGER` may already have been rounded by the time it
+ * reached us as a JS number. A `string` is accepted as-is (after validating
+ * it is plain non-negative decimal digits) specifically so that a nonce
+ * recovered as raw text — before `JSON.parse` had a chance to round it — can
+ * be carried through untouched.
+ */
+function nonceText(nonce: number | string): string {
+  if (typeof nonce === 'number') {
+    if (!Number.isSafeInteger(nonce) || nonce < 0) {
+      throw new Error(`nonce must be a non-negative safe integer, got ${nonce}`);
+    }
+    return String(nonce);
+  }
+  if (!/^\d+$/.test(nonce)) {
+    throw new Error(`nonce must be a non-negative integer string, got ${JSON.stringify(nonce)}`);
+  }
+  return nonce;
+}
+
 export function signingPayload(
   room: string,
-  nonce: number,
+  nonce: number | string,
   sanitizedText: string,
 ): Buffer {
-  if (!Number.isSafeInteger(nonce) || nonce < 0) {
-    throw new Error(`nonce must be a non-negative safe integer, got ${nonce}`);
-  }
-  return Buffer.from(`${room}|${nonce}|${sanitizedText}`, 'utf8');
+  return Buffer.from(`${room}|${nonceText(nonce)}|${sanitizedText}`, 'utf8');
 }
 
 export function publicKeyFromDid(did: string): KeyObject {
@@ -32,7 +51,7 @@ export function publicKeyFromDid(did: string): KeyObject {
 export function signPayload(
   privateKey: KeyObject,
   room: string,
-  nonce: number,
+  nonce: number | string,
   sanitizedText: string,
 ): string {
   const sig = cryptoSign(null, signingPayload(room, nonce, sanitizedText), privateKey);
@@ -42,7 +61,7 @@ export function signPayload(
 export function verifyPayload(
   did: string,
   room: string,
-  nonce: number,
+  nonce: number | string,
   sanitizedText: string,
   sigB64url: string,
 ): boolean {

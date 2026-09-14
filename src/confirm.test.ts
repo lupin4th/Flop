@@ -93,7 +93,7 @@ test('matchesReceipt is true only for a message that matches did, nonce, text an
   isolate();
   const { did, privateKey } = generateIdentity();
   const r = createReceipt(privateKey, did, 'lobby', 'hello', BASE, []);
-  const m: RoomMessage = { seq: 1, ts: 't', from: did, text: r.sanitized_text, nonce: r.nonce };
+  const m: RoomMessage = { seq: 1, ts: 't', from: did, text: r.sanitized_text, nonce: String(r.nonce) };
   assert.equal(matchesReceipt(m, r), true);
 });
 
@@ -103,7 +103,7 @@ test('matchesReceipt ignores a message from a different did', () => {
   const other = generateIdentity();
   const r = createReceipt(privateKey, did, 'lobby', 'hello', BASE, []);
   const m: RoomMessage = {
-    seq: 1, ts: 't', from: other.did, text: r.sanitized_text, nonce: r.nonce,
+    seq: 1, ts: 't', from: other.did, text: r.sanitized_text, nonce: String(r.nonce),
   };
   assert.equal(matchesReceipt(m, r), false);
 });
@@ -112,7 +112,7 @@ test('matchesReceipt ignores a message with the right did and nonce but differen
   isolate();
   const { did, privateKey } = generateIdentity();
   const r = createReceipt(privateKey, did, 'lobby', 'hello', BASE, []);
-  const m: RoomMessage = { seq: 1, ts: 't', from: did, text: 'tampered', nonce: r.nonce };
+  const m: RoomMessage = { seq: 1, ts: 't', from: did, text: 'tampered', nonce: String(r.nonce) };
   assert.equal(matchesReceipt(m, r), false);
 });
 
@@ -121,7 +121,7 @@ test('matchesReceipt rejects a receipt whose signature does not verify', () => {
   const { did, privateKey } = generateIdentity();
   const r = createReceipt(privateKey, did, 'lobby', 'hello', BASE, []);
   const tampered: Receipt = { ...r, sig: tamperSignature(r.sig) };
-  const m: RoomMessage = { seq: 1, ts: 't', from: did, text: tampered.sanitized_text, nonce: tampered.nonce };
+  const m: RoomMessage = { seq: 1, ts: 't', from: did, text: tampered.sanitized_text, nonce: String(tampered.nonce) };
   assert.equal(matchesReceipt(m, tampered), false);
 });
 
@@ -163,7 +163,7 @@ test('confirmRoom confirms a matching message that appears after the watermark',
   const r = createReceipt(privateKey, did, 'lobby', 'hello', BASE, []);
   const fetchImpl = scriptedFetch([
     [{ seq: 5, ts: 't0', from: '~a', text: 'noise' }], // fetchLatestSeq -> watermark 5
-    [{ seq: 6, ts: 't1', from: did, text: r.sanitized_text, nonce: r.nonce }],
+    [{ seq: 6, ts: 't1', from: did, text: r.sanitized_text, nonce: String(r.nonce) }],
   ]);
   const result = await confirmRoom('lobby', [r], {
     fetchImpl: fetchImpl as unknown as typeof fetch,
@@ -185,7 +185,7 @@ test('confirmRoom ignores a message from a different did', async () => {
   const r = createReceipt(privateKey, did, 'lobby', 'hello', BASE, []);
   const fetchImpl = scriptedFetch([
     [],
-    [{ seq: 1, ts: 't1', from: other.did, text: r.sanitized_text, nonce: r.nonce }],
+    [{ seq: 1, ts: 't1', from: other.did, text: r.sanitized_text, nonce: String(r.nonce) }],
   ]);
   const result = await confirmRoom('lobby', [r], {
     fetchImpl: fetchImpl as unknown as typeof fetch,
@@ -202,7 +202,7 @@ test('confirmRoom ignores a message with the right did and nonce but different t
   const r = createReceipt(privateKey, did, 'lobby', 'hello', BASE, []);
   const fetchImpl = scriptedFetch([
     [],
-    [{ seq: 1, ts: 't1', from: did, text: 'tampered', nonce: r.nonce }],
+    [{ seq: 1, ts: 't1', from: did, text: 'tampered', nonce: String(r.nonce) }],
   ]);
   const result = await confirmRoom('lobby', [r], {
     fetchImpl: fetchImpl as unknown as typeof fetch,
@@ -220,7 +220,7 @@ test('confirmRoom never confirms a receipt whose signature does not verify', asy
   const tampered: Receipt = { ...r, sig: tamperSignature(r.sig) };
   const fetchImpl = scriptedFetch([
     [],
-    [{ seq: 1, ts: 't1', from: did, text: tampered.sanitized_text, nonce: tampered.nonce }],
+    [{ seq: 1, ts: 't1', from: did, text: tampered.sanitized_text, nonce: String(tampered.nonce) }],
   ]);
   const result = await confirmRoom('lobby', [tampered], {
     fetchImpl: fetchImpl as unknown as typeof fetch,
@@ -261,7 +261,7 @@ test('confirmRoom advances its watermark across multiple polls and finds a later
     [{ seq: 10, ts: 't0', from: '~a', text: 'noise' }], // watermark 10
     [{ seq: 11, ts: 't1', from: '~a', text: 'still not it' }],
     [{ seq: 12, ts: 't2', from: '~a', text: 'nope' }],
-    [{ seq: 13, ts: 't3', from: did, text: r.sanitized_text, nonce: r.nonce }],
+    [{ seq: 13, ts: 't3', from: did, text: r.sanitized_text, nonce: String(r.nonce) }],
   ]);
   const result = await confirmRoom('lobby', [r], {
     fetchImpl: fetchImpl as unknown as typeof fetch,
@@ -295,7 +295,7 @@ test('confirmRoom on an empty room starts from watermark 0 and does not crash', 
   const r = createReceipt(privateKey, did, 'lobby', 'hello', BASE, []);
   const fetchImpl = scriptedFetch([
     [], // empty room -> fetchLatestSeq returns 0
-    [{ seq: 1, ts: 't1', from: did, text: r.sanitized_text, nonce: r.nonce }],
+    [{ seq: 1, ts: 't1', from: did, text: r.sanitized_text, nonce: String(r.nonce) }],
   ]);
   const result = await confirmRoom('lobby', [r], {
     fetchImpl: fetchImpl as unknown as typeof fetch,
@@ -313,7 +313,7 @@ test('confirmRoom recovers from a poll round that throws and still confirms on a
   const fetchImpl = scriptedFetchWithFailures([
     [], // watermark lookup: empty room -> 0
     'throw',
-    [{ seq: 1, ts: 't1', from: did, text: r.sanitized_text, nonce: r.nonce }],
+    [{ seq: 1, ts: 't1', from: did, text: r.sanitized_text, nonce: String(r.nonce) }],
   ]);
   const sleepCalls: number[] = [];
   const result = await confirmRoom('lobby', [r], {
@@ -334,7 +334,7 @@ test('confirmRoom recovers from a 200 response with a non-JSON body and still co
   const fetchImpl = scriptedFetchWithFailures([
     [],
     'bad-json',
-    [{ seq: 1, ts: 't1', from: did, text: r.sanitized_text, nonce: r.nonce }],
+    [{ seq: 1, ts: 't1', from: did, text: r.sanitized_text, nonce: String(r.nonce) }],
   ]);
   const sleepCalls: number[] = [];
   const result = await confirmRoom('lobby', [r], {
@@ -355,7 +355,7 @@ test('confirmRoom recovers from a 503 and still confirms on a later round', asyn
   const fetchImpl = scriptedFetchWithFailures([
     [],
     '503',
-    [{ seq: 1, ts: 't1', from: did, text: r.sanitized_text, nonce: r.nonce }],
+    [{ seq: 1, ts: 't1', from: did, text: r.sanitized_text, nonce: String(r.nonce) }],
   ]);
   const sleepCalls: number[] = [];
   const result = await confirmRoom('lobby', [r], {

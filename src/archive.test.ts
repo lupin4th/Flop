@@ -18,7 +18,7 @@ test('an anonymous nickname is unsigned', () => {
 });
 
 test('a did we hold no receipt for is server_attested, never verified', () => {
-  const m: RoomMessage = { seq: 1, ts: '1', from: 'did:key:zAAA', text: 'hi', nonce: 5 };
+  const m: RoomMessage = { seq: 1, ts: '1', from: 'did:key:zAAA', text: 'hi', nonce: '5' };
   assert.equal(labelMessage(m, []), 'server_attested');
 });
 
@@ -27,7 +27,7 @@ test('a message matching one of our own receipts is self_verified', () => {
   const { did, privateKey } = generateIdentity();
   const r = createReceipt(privateKey, did, 'lobby', 'hello', 'https://x', []);
   const m: RoomMessage = {
-    seq: 1, ts: '1', from: did, text: r.sanitized_text, nonce: r.nonce,
+    seq: 1, ts: '1', from: did, text: r.sanitized_text, nonce: String(r.nonce),
   };
   assert.equal(labelMessage(m, [r]), 'self_verified');
 });
@@ -36,7 +36,7 @@ test('a receipt that does not match the message text is not self_verified', () =
   isolate();
   const { did, privateKey } = generateIdentity();
   const r = createReceipt(privateKey, did, 'lobby', 'hello', 'https://x', []);
-  const m: RoomMessage = { seq: 1, ts: '1', from: did, text: 'tampered', nonce: r.nonce };
+  const m: RoomMessage = { seq: 1, ts: '1', from: did, text: 'tampered', nonce: String(r.nonce) };
   assert.equal(labelMessage(m, [r]), 'server_attested');
 });
 
@@ -74,4 +74,18 @@ test('archiving twice does not duplicate messages already recorded', async () =>
   const second = await archiveRoom('lobby', opts);
   assert.equal(second.written, 0);
   assert.equal(loadArchive('lobby').length, 1);
+});
+
+test('a message matches one of our own receipts even with a nonce beyond Number.MAX_SAFE_INTEGER', () => {
+  isolate();
+  const { did, privateKey } = generateIdentity();
+  // Our own receipts always carry a safe-integer nonce (nextNonce is clock
+  // based), but the room message we compare against now carries the nonce
+  // as an exact decimal string, possibly one that would round if it were a
+  // number. labelMessage must compare via String(receipt.nonce) === message.nonce.
+  const r = createReceipt(privateKey, did, 'lobby', 'hello', 'https://x', []);
+  const m: RoomMessage = {
+    seq: 1, ts: '1', from: did, text: r.sanitized_text, nonce: String(r.nonce),
+  };
+  assert.equal(labelMessage(m, [r]), 'self_verified');
 });

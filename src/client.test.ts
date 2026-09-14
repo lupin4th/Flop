@@ -10,7 +10,9 @@ test('parses well-formed messages', () => {
     ],
   });
   assert.equal(msgs.length, 2);
-  assert.equal(msgs[1].nonce, 9);
+  // nonce is always normalised to its exact decimal string, never a number,
+  // so that a nonce beyond Number.MAX_SAFE_INTEGER is never silently rounded.
+  assert.equal(msgs[1].nonce, '9');
 });
 
 test('drops entries that are not shaped like messages', () => {
@@ -222,4 +224,34 @@ test('fetchLatestSeq returns 0 for an empty room', async () => {
     new Response(JSON.stringify({ messages: [] }), { status: 200 });
   const seq = await fetchLatestSeq('lobby', { fetchImpl: fakeFetch as unknown as typeof fetch });
   assert.equal(seq, 0);
+});
+
+// --- exact-nonce recovery (regression: nanosecond nonces beyond 2^53) ------
+
+test('fetchRoom recovers a nonce beyond Number.MAX_SAFE_INTEGER as its exact digit string', async () => {
+  const bigNonce = '1789348196321255900';
+  // Built by hand, not via JSON.stringify: JSON.stringify(1789348196321255900)
+  // would already have rounded the number before it ever became text, which
+  // is exactly the bug. The raw body must carry the unrounded digits, the
+  // way the real server's response bytes do.
+  const body = `{"messages":[{"seq":1,"ts":"t","from":"did:key:zAAA","text":"hi","nonce":${bigNonce}}]}`;
+  const fakeFetch = async () => new Response(body, { status: 200 });
+  const msgs = await fetchRoom('lobby', { fetchImpl: fakeFetch as unknown as typeof fetch });
+  assert.equal(msgs.length, 1);
+  assert.equal(msgs[0].nonce, bigNonce);
+  assert.notEqual(msgs[0].nonce, String(Number(bigNonce)));
+});
+
+test('fetchRoom falls back to the parsed (rounded) nonce when raw and parsed counts disagree', async () => {
+  // A pathological body where the number of raw "nonce": occurrences does not
+  // match the number of messages carrying a nonce after parsing (here, an
+  // extra "nonce" substring appears outside the messages array). The fix
+  // must not mispair in this case — it should fall back to the parsed value
+  // rather than guess.
+  const body =
+    '{"decoyNonce":{"nonce":1},"messages":[{"seq":1,"ts":"t","from":"did:key:zAAA","text":"hi","nonce":5}]}';
+  const fakeFetch = async () => new Response(body, { status: 200 });
+  const msgs = await fetchRoom('lobby', { fetchImpl: fakeFetch as unknown as typeof fetch });
+  assert.equal(msgs.length, 1);
+  assert.equal(msgs[0].nonce, '5');
 });

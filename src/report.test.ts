@@ -36,7 +36,7 @@ test('summarises archives by trust label', () => {
   const archives: Record<string, ArchivedMessage[]> = {
     lobby: [
       { seq: 1, ts: '1', from: '~a', text: 'x', trust: 'unsigned' },
-      { seq: 2, ts: '2', from: 'did:key:zA', text: 'y', nonce: 1, trust: 'server_attested' },
+      { seq: 2, ts: '2', from: 'did:key:zA', text: 'y', nonce: '1', trust: 'server_attested' },
     ],
   };
   const out = buildReport([], archives);

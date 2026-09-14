@@ -31,7 +31,11 @@ export type Confirmation = {
 export function matchesReceipt(m: RoomMessage, r: Receipt): boolean {
   return (
     r.did === m.from &&
-    r.nonce === m.nonce &&
+    // r.nonce is our own, always a safe-integer number; m.nonce is the
+    // exact decimal text recovered from the room (see client.ts), which may
+    // exceed Number.MAX_SAFE_INTEGER. Compare as strings on both sides so
+    // the two representations line up without rounding either one.
+    String(r.nonce) === m.nonce &&
     r.sanitized_text === m.text &&
     verifyReceipt(r)
   );
