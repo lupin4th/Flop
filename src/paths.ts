@@ -19,6 +19,10 @@ export function confirmationsPath(): string {
   return join(attestHome(), 'confirmations.jsonl');
 }
 
+export function watchStatePath(): string {
+  return join(attestHome(), 'watch-state.json');
+}
+
 export function archiveDir(room: string): string {
   assertSafeRoom(room);
   const root = resolve(join(attestHome(), 'archive'));

@@ -1,0 +1,77 @@
+name: watch
+
+# Watches for an official FLOP Labs testnet/faucet announcement on GitHub,
+# flop.finance and a handful of chat rooms. This is a one-shot check, run on
+# a schedule — there is no daemon mode in the CLI itself (`technocore-attest
+# watch` always runs exactly one pass and exits).
+#
+# `node dist/cli.js watch` never receives GITHUB_TOKEN: it makes one
+# unauthenticated request to the GitHub REST API (well inside the 60
+# requests/hour anonymous limit) and reads two public flop.finance pages and
+# three public chat rooms. It reads only — it holds no credentials and signs
+# nothing. GITHUB_TOKEN is used in this workflow strictly to open an issue
+# when a finding shows up, in a separate step, under `permissions:
+# issues: write` and nothing broader.
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  TECHNOCORE_ATTEST_HOME: ${{ github.workspace }}/.technocore-attest-state
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # watch-state.json is the only thing that needs to survive between
+      # runs (it is the baseline this command diffs the next run against).
+      # The cache key includes the run id so every run writes a fresh entry,
+      # and restore-keys falls back to the newest previous entry by prefix
+      # match, so the state a run restores is always the most recent one
+      # saved rather than a stale, arbitrarily-old cache hit.
+      - name: Restore watch state
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.TECHNOCORE_ATTEST_HOME }}
+          key: watch-state-${{ github.run_id }}
+          restore-keys: |
+            watch-state-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Run watch
+        id: run_watch
+        # This tool reads only. GITHUB_TOKEN is intentionally absent from
+        # this step's environment: our own code never touches it.
+        run: |
+          set +e
+          node dist/cli.js watch > watch-output.txt 2>&1
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          cat watch-output.txt
+
+      - name: Open an issue for new findings
+        if: steps.run_watch.outputs.exit_code == '10'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+            --title "technocore-attest watch: new activity detected ($(date -u +%Y-%m-%dT%H:%MZ))" \
+            --body-file watch-output.txt

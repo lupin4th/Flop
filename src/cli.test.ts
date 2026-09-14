@@ -139,3 +139,71 @@ test('sign rejects an unsafe room name before ever prompting for a passphrase', 
   assert.notEqual(code, 0);
   assert.equal(prompted, false);
 });
+
+function fakeFetchFor(overrides: { github?: unknown; roomMessages?: unknown[] } = {}) {
+  return (async (url: string | URL) => {
+    const s = String(url);
+    if (s.includes('api.github.com')) {
+      return new Response(JSON.stringify(overrides.github ?? []), { status: 200 });
+    }
+    if (s.includes('flop.finance')) {
+      return new Response('<html><body>Coming soon</body></html>', { status: 200 });
+    }
+    return new Response(JSON.stringify({ messages: overrides.roomMessages ?? [] }), { status: 200 });
+  }) as unknown as typeof fetch;
+}
+
+test('watch exits 0 and reports no changes when nothing is new', async () => {
+  isolate();
+  const originalFetch = global.fetch;
+  global.fetch = fakeFetchFor();
+  try {
+    const h = harness();
+    const code = await run(['watch'], h.io);
+    assert.equal(code, 0);
+    assert.match(h.lines.join('\n'), /no changes/i);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('watch exits 10 and prints official findings when a new GitHub repo appears', async () => {
+  isolate();
+  const originalFetch = global.fetch;
+  global.fetch = fakeFetchFor({
+    github: [
+      {
+        name: 'testnet-faucet',
+        pushed_at: '2026-05-01T00:00:00Z',
+        description: 'the faucet',
+        html_url: 'https://github.com/flop-labs/testnet-faucet',
+      },
+    ],
+  });
+  try {
+    const h = harness();
+    const code = await run(['watch'], h.io);
+    assert.equal(code, 10);
+    assert.match(h.lines.join('\n'), /testnet-faucet/);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('watch labels chat matches as unverified chatter, separate from official findings', async () => {
+  isolate();
+  const originalFetch = global.fetch;
+  global.fetch = fakeFetchFor({
+    roomMessages: [{ seq: 1, ts: 't', from: '~a', text: 'faucet is live!' }],
+  });
+  try {
+    const h = harness();
+    const code = await run(['watch'], h.io);
+    assert.equal(code, 10);
+    const out = h.lines.join('\n');
+    assert.match(out, /unverified/i);
+    assert.match(out, /faucet is live/);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});

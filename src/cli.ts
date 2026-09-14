@@ -12,6 +12,7 @@ import { buildReport } from './report.js';
 import { DEFAULT_BASE, fetchLatestSeq } from './client.js';
 import { assertSafeRoom } from './room.js';
 import { confirmRoom, loadConfirmations, unconfirmedReceipts } from './confirm.js';
+import { runWatch } from './watch.js';
 
 export type Io = {
   out: (s: string) => void;
@@ -25,6 +26,7 @@ const USAGE = `Usage:
   technocore-attest archive <room>         snapshot a room before its ring buffer drops it
   technocore-attest confirm <room>         watch a room and confirm the server served your unconfirmed messages
   technocore-attest report                 summarise receipts and archives
+  technocore-attest watch                  one-shot check of GitHub, flop.finance and chat for a testnet/faucet announcement
 
 This tool never sends a message for you. \`sign\` prints a URL; opening it is your call.
 Never paste a private key, seed phrase or API key into a public room.`;
@@ -131,6 +133,30 @@ async function cmdConfirm(io: Io, room: string): Promise<number> {
   return 0;
 }
 
+async function cmdWatch(io: Io): Promise<number> {
+  const { findings } = await runWatch();
+  if (findings.length === 0) {
+    io.out('No changes detected on GitHub, flop.finance or the watched rooms.');
+    return 0;
+  }
+  const official = findings.filter((f) => f.trust === 'official');
+  const unverified = findings.filter((f) => f.trust === 'unverified');
+  if (official.length > 0) {
+    io.out('## Official (GitHub / flop.finance)');
+    for (const f of official) {
+      io.out(`- ${f.summary} (${f.detail})`);
+    }
+  }
+  if (unverified.length > 0) {
+    if (official.length > 0) io.out('');
+    io.out('## Unverified chat chatter — unconfirmed by any official source, proves nothing on its own');
+    for (const f of unverified) {
+      io.out(`- ${f.summary} (${f.detail})`);
+    }
+  }
+  return 10;
+}
+
 function cmdReport(io: Io): number {
   const { receipts, malformed } = readReceiptLog();
   const { confirmations } = loadConfirmations();
@@ -175,6 +201,8 @@ export async function run(argv: string[], io: Io): Promise<number> {
       return cmdConfirm(io, rest[0]);
     case 'report':
       return cmdReport(io);
+    case 'watch':
+      return cmdWatch(io);
     default:
       io.out(USAGE);
       return 1;
