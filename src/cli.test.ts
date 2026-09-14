@@ -167,20 +167,66 @@ test('watch exits 0 and reports no changes when nothing is new', async () => {
   }
 });
 
-test('watch exits 10 and prints official findings when a new GitHub repo appears', async () => {
+test('watch prints a Baselined line and stays quiet the first time it sees a GitHub repo', async () => {
   isolate();
   const originalFetch = global.fetch;
   global.fetch = fakeFetchFor({
     github: [
       {
-        name: 'testnet-faucet',
-        pushed_at: '2026-05-01T00:00:00Z',
-        description: 'the faucet',
-        html_url: 'https://github.com/flop-labs/testnet-faucet',
+        name: 'tclk',
+        pushed_at: '2026-01-01T00:00:00Z',
+        description: 'core',
+        html_url: 'https://github.com/flop-labs/tclk',
       },
     ],
   });
   try {
+    const h = harness();
+    const code = await run(['watch'], h.io);
+    assert.equal(code, 0);
+    assert.match(h.lines.join('\n'), /baselined/i);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('watch exits 10 and prints official findings once a baseline exists and a new GitHub repo appears', async () => {
+  isolate();
+  const originalFetch = global.fetch;
+  try {
+    // First run: establishes the baseline with one known repo. Nothing is
+    // "new" yet, so this must come back quiet.
+    global.fetch = fakeFetchFor({
+      github: [
+        {
+          name: 'tclk',
+          pushed_at: '2026-01-01T00:00:00Z',
+          description: 'core',
+          html_url: 'https://github.com/flop-labs/tclk',
+        },
+      ],
+    });
+    const baseline = harness();
+    const baselineCode = await run(['watch'], baseline.io);
+    assert.equal(baselineCode, 0);
+
+    // Second run: a genuinely new repo shows up alongside the known one.
+    global.fetch = fakeFetchFor({
+      github: [
+        {
+          name: 'tclk',
+          pushed_at: '2026-01-01T00:00:00Z',
+          description: 'core',
+          html_url: 'https://github.com/flop-labs/tclk',
+        },
+        {
+          name: 'testnet-faucet',
+          pushed_at: '2026-05-01T00:00:00Z',
+          description: 'the faucet',
+          html_url: 'https://github.com/flop-labs/testnet-faucet',
+        },
+      ],
+    });
     const h = harness();
     const code = await run(['watch'], h.io);
     assert.equal(code, 10);
@@ -190,13 +236,21 @@ test('watch exits 10 and prints official findings when a new GitHub repo appears
   }
 });
 
-test('watch labels chat matches as unverified chatter, separate from official findings', async () => {
+test('watch labels chat matches as unverified chatter, once a room has a baseline', async () => {
   isolate();
   const originalFetch = global.fetch;
-  global.fetch = fakeFetchFor({
-    roomMessages: [{ seq: 1, ts: 't', from: '~a', text: 'faucet is live!' }],
-  });
   try {
+    // First run: baselines the room. The message is already present but
+    // must not be reported yet — there is no "since" to compare against.
+    global.fetch = fakeFetchFor({
+      roomMessages: [{ seq: 1, ts: 't', from: '~a', text: 'faucet is live!' }],
+    });
+    const baseline = harness();
+    const baselineCode = await run(['watch'], baseline.io);
+    assert.equal(baselineCode, 0);
+
+    // Second run: the same message is still being served, and the room now
+    // has a baseline, so it is reported as unverified chat chatter.
     const h = harness();
     const code = await run(['watch'], h.io);
     assert.equal(code, 10);

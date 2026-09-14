@@ -134,7 +134,13 @@ async function cmdConfirm(io: Io, room: string): Promise<number> {
 }
 
 async function cmdWatch(io: Io): Promise<number> {
-  const { findings } = await runWatch();
+  const { findings, baselined } = await runWatch();
+  const baselineParts: string[] = [];
+  if (baselined.github) baselineParts.push(`github (${baselined.repoCount} repos)`);
+  if (baselined.rooms.length > 0) baselineParts.push(`rooms (${baselined.rooms.length} rooms)`);
+  if (baselineParts.length > 0) {
+    io.out(`Baselined ${baselineParts.join(', ')} — no comparison possible on first run.`);
+  }
   if (findings.length === 0) {
     io.out('No changes detected on GitHub, flop.finance or the watched rooms.');
     return 0;

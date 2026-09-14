@@ -134,6 +134,42 @@ test('checkGitHub reports a changed pushed_at on a known repo', async () => {
   assert.equal(state.repos['tclk'], '2026-06-01T00:00:00Z');
 });
 
+test('checkGitHub emits no findings on the very first run (empty state), but records every repo', async () => {
+  isolate();
+  const state = freshState();
+  const fetchImpl = (async () =>
+    jsonResponse([
+      { name: 'tclk', pushed_at: '2026-01-01T00:00:00Z', description: 'core', html_url: 'https://github.com/flop-labs/tclk' },
+      { name: '.github', pushed_at: '2026-01-01T00:00:00Z', description: null, html_url: 'https://github.com/flop-labs/.github' },
+      { name: 'yellowpaper', pushed_at: '2026-01-01T00:00:00Z', description: 'the paper', html_url: 'https://github.com/flop-labs/yellowpaper' },
+    ])) as unknown as typeof fetch;
+  const findings = await checkGitHub(state, { fetchImpl });
+  assert.equal(findings.length, 0);
+  assert.equal(state.repos['tclk'], '2026-01-01T00:00:00Z');
+  assert.equal(state.repos['.github'], '2026-01-01T00:00:00Z');
+  assert.equal(state.repos['yellowpaper'], '2026-01-01T00:00:00Z');
+});
+
+test('checkGitHub emits exactly one finding on the run after a baseline, when one repo is added', async () => {
+  isolate();
+  const state = freshState();
+  const firstFetch = (async () =>
+    jsonResponse([
+      { name: 'tclk', pushed_at: '2026-01-01T00:00:00Z', description: 'core', html_url: 'https://github.com/flop-labs/tclk' },
+    ])) as unknown as typeof fetch;
+  const firstFindings = await checkGitHub(state, { fetchImpl: firstFetch });
+  assert.equal(firstFindings.length, 0); // baseline run
+
+  const secondFetch = (async () =>
+    jsonResponse([
+      { name: 'tclk', pushed_at: '2026-01-01T00:00:00Z', description: 'core', html_url: 'https://github.com/flop-labs/tclk' },
+      { name: 'testnet-faucet', pushed_at: '2026-05-01T00:00:00Z', description: 'the faucet', html_url: 'https://github.com/flop-labs/testnet-faucet' },
+    ])) as unknown as typeof fetch;
+  const secondFindings = await checkGitHub(state, { fetchImpl: secondFetch });
+  assert.equal(secondFindings.length, 1);
+  assert.match(secondFindings[0].summary, /testnet-faucet/);
+});
+
 // --- checkPages -------------------------------------------------------------
 
 test('checkPages stores hashes and emits no findings on the first run', async () => {
@@ -174,9 +210,27 @@ function fakeRoomFetch(byRoom: Record<string, RoomMessage[]>): typeof fetch {
   }) as unknown as typeof fetch;
 }
 
-test('checkRooms labels every chat finding unverified', async () => {
+/** A state whose rooms already have a baseline (as if a prior run happened). */
+function stateWithRoomBaseline(rooms: Record<string, number>): WatchState {
+  const state = freshState();
+  state.rooms = { ...rooms };
+  return state;
+}
+
+test('checkRooms emits no chat findings on a room\'s first run, but records its seq', async () => {
   isolate();
   const state = freshState();
+  const fetchImpl = fakeRoomFetch({
+    technocore: [{ seq: 5, ts: 't', from: '~a', text: 'the faucet is opening soon' }],
+  });
+  const findings = await checkRooms(state, { fetchImpl });
+  assert.equal(findings.length, 0);
+  assert.equal(state.rooms['technocore'], 5);
+});
+
+test('checkRooms labels every chat finding unverified, once a room has a baseline', async () => {
+  isolate();
+  const state = stateWithRoomBaseline({ technocore: 0 });
   const fetchImpl = fakeRoomFetch({
     technocore: [{ seq: 1, ts: 't', from: '~a', text: 'the faucet is opening soon' }],
   });
@@ -186,9 +240,9 @@ test('checkRooms labels every chat finding unverified', async () => {
   assert.equal(findings[0].source, 'chat');
 });
 
-test('checkRooms emits nothing for a room with no keyword matches', async () => {
+test('checkRooms emits nothing for an already-baselined room with no keyword matches', async () => {
   isolate();
-  const state = freshState();
+  const state = stateWithRoomBaseline({ technocore: 0 });
   const fetchImpl = fakeRoomFetch({
     technocore: [{ seq: 1, ts: 't', from: '~a', text: 'just saying hi' }],
   });
@@ -196,9 +250,24 @@ test('checkRooms emits nothing for a room with no keyword matches', async () => 
   assert.equal(findings.length, 0);
 });
 
+test('a room\'s first run does not suppress findings for an already-baselined room', async () => {
+  isolate();
+  const state = stateWithRoomBaseline({ technocore: 0 });
+  const fetchImpl = fakeRoomFetch({
+    technocore: [{ seq: 1, ts: 't', from: '~a', text: 'the faucet is open' }],
+    flop_labs: [{ seq: 1, ts: 't', from: '~a', text: 'the faucet is open' }],
+  });
+  const findings = await checkRooms(state, { fetchImpl });
+  // technocore already had a baseline and should report; flop_labs is on
+  // its first run and should stay silent, independently of technocore.
+  assert.equal(findings.length, 1);
+  assert.match(findings[0].detail, /^technocore#/);
+  assert.equal(state.rooms['flop_labs'], 1);
+});
+
 test('checkRooms caps chat findings at 5 per run and reports the suppressed count', async () => {
   isolate();
-  const state = freshState();
+  const state = stateWithRoomBaseline({ technocore: 0 });
   const messages: RoomMessage[] = Array.from({ length: 7 }, (_, i) => ({
     seq: i + 1,
     ts: 't',
@@ -212,6 +281,48 @@ test('checkRooms caps chat findings at 5 per run and reports the suppressed coun
   const suppressionNote = findings.find((f: Finding) => /suppressed/i.test(f.summary));
   assert.ok(suppressionNote, 'expected a suppression note');
   assert.match(suppressionNote!.summary, /2/);
+});
+
+// --- keyword precision ------------------------------------------------
+
+function oneMessageFinding(text: string): Promise<Finding[]> {
+  const state = stateWithRoomBaseline({ technocore: 0 });
+  const fetchImpl = fakeRoomFetch({
+    technocore: [{ seq: 1, ts: 't', from: '~a', text }],
+  });
+  return checkRooms(state, { fetchImpl });
+}
+
+test('checkRooms does not match generic agent chatter containing "claiming"', async () => {
+  isolate();
+  const findings = await oneMessageFinding(
+    'My agent is tracking it without automatically claiming the task.',
+  );
+  assert.equal(findings.length, 0);
+});
+
+test('checkRooms does not match a bare testnet-presence heartbeat', async () => {
+  isolate();
+  const findings = await oneMessageFinding('[FLOP-8DCBA7] testnet node · cap=poui_verifier_v1 · t=6aa8009d');
+  assert.equal(findings.length, 0);
+});
+
+test('checkRooms does not match "maintaining technocore testnet presence"', async () => {
+  isolate();
+  const findings = await oneMessageFinding('maintaining technocore testnet presence');
+  assert.equal(findings.length, 0);
+});
+
+test('checkRooms matches "the faucet is open"', async () => {
+  isolate();
+  const findings = await oneMessageFinding('the faucet is open');
+  assert.equal(findings.length, 1);
+});
+
+test('checkRooms matches a bare mention of "faucet"', async () => {
+  isolate();
+  const findings = await oneMessageFinding('does anyone know when the faucet drops');
+  assert.equal(findings.length, 1);
 });
 
 // --- runWatch -------------------------------------------------------------
@@ -240,4 +351,28 @@ test('runWatch saves state exactly once at the end', async () => {
   const { state } = await runWatch({ fetchImpl });
   const reloaded = loadWatchState();
   assert.deepEqual(reloaded, state);
+});
+
+test('runWatch reports which sources were baselined on a first run, and none on a second', async () => {
+  isolate();
+  const fetchImpl = (async (url: string | URL) => {
+    const s = String(url);
+    if (s.includes('api.github.com')) {
+      return jsonResponse([
+        { name: 'tclk', pushed_at: '2026-01-01T00:00:00Z', description: 'core', html_url: 'https://github.com/flop-labs/tclk' },
+      ]);
+    }
+    if (s.includes('flop.finance')) return new Response('<html><body>hi</body></html>');
+    return jsonResponse({ messages: [] });
+  }) as unknown as typeof fetch;
+
+  const first = await runWatch({ fetchImpl });
+  assert.equal(first.findings.length, 0);
+  assert.equal(first.baselined.github, true);
+  assert.equal(first.baselined.repoCount, 1);
+  assert.deepEqual(first.baselined.rooms.sort(), ['flop_labs', 'technocore', 'technocore-genesis']);
+
+  const second = await runWatch({ fetchImpl });
+  assert.equal(second.baselined.github, false);
+  assert.deepEqual(second.baselined.rooms, []);
 });

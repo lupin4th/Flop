@@ -44,7 +44,26 @@ const PAGES = [
 // noise, so watching it would only slow every run down for nothing.
 const ROOMS = ['technocore', 'flop_labs', 'technocore-genesis'];
 
-const KEYWORDS = ['faucet', 'testnet', 'genesis block', 'mainnet', 'claim', 'drip'];
+/**
+ * Bare `testnet`, `mainnet` and `claim` were tried first and measured
+ * against a live room snapshot: they matched bot presence heartbeats
+ * (`"testnet node · cap=poui_verifier_v1"`, `"maintaining technocore
+ * testnet presence"`) and unrelated agent chatter (`"without automatically
+ * claiming the task"`), at a rate that buried any real hit under noise.
+ * `faucet` alone stayed precise even in a full room snapshot (38 mentions
+ * from only 3 distinct DIDs), so it is kept bare; everything else here is a
+ * multi-word phrase specific enough not to fire on routine chatter.
+ */
+const KEYWORDS = [
+  'faucet',
+  'drip',
+  'genesis block',
+  'testnet is live',
+  'testnet is open',
+  'testnet has launched',
+  'faucet is live',
+  'faucet is open',
+];
 
 /** A spam burst in a watched room must not flood a run's output. */
 const MAX_CHAT_FINDINGS_PER_ROOM = 5;
@@ -147,6 +166,14 @@ function isGhRepo(value: unknown): value is GhRepo {
  * GitHub repo for each major event (the sonnet contest's referee DID was
  * pinned in one), so a new repo name is called out as such rather than
  * folded into the same wording as an ordinary push.
+ *
+ * `state.repos` being empty means there is no baseline yet — every repo in
+ * the org would otherwise look "new" on the very first run, which is
+ * exactly what a live run against an empty state produced: five false
+ * "NEW REPO" findings for repos that had simply never been seen before by
+ * this tool. So an empty `state.repos` silently records every repo's
+ * current `pushed_at` and reports nothing; only a run that already has a
+ * baseline can tell a genuinely new repo from an old one.
  */
 export async function checkGitHub(state: WatchState, opts: WatchOpts = {}): Promise<Finding[]> {
   const doFetch = opts.fetchImpl ?? fetch;
@@ -158,28 +185,31 @@ export async function checkGitHub(state: WatchState, opts: WatchOpts = {}): Prom
   const body: unknown = await res.json();
   if (!Array.isArray(body)) return [];
 
+  const firstRun = Object.keys(state.repos).length === 0;
   const at = new Date(nowMs()).toISOString();
   const findings: Finding[] = [];
   for (const item of body) {
     if (!isGhRepo(item)) continue;
     const prior = state.repos[item.name];
-    if (prior === undefined) {
-      const desc = item.description ? ` — ${item.description}` : '';
-      findings.push({
-        source: 'github',
-        trust: 'official',
-        summary: `NEW REPO in flop-labs: ${item.name}${desc} (a brand-new repo is the highest-value signal)`,
-        detail: item.html_url,
-        at,
-      });
-    } else if (prior !== item.pushed_at) {
-      findings.push({
-        source: 'github',
-        trust: 'official',
-        summary: `Repo pushed: ${item.name}`,
-        detail: item.html_url,
-        at,
-      });
+    if (!firstRun) {
+      if (prior === undefined) {
+        const desc = item.description ? ` — ${item.description}` : '';
+        findings.push({
+          source: 'github',
+          trust: 'official',
+          summary: `NEW REPO in flop-labs: ${item.name}${desc} (a brand-new repo is the highest-value signal)`,
+          detail: item.html_url,
+          at,
+        });
+      } else if (prior !== item.pushed_at) {
+        findings.push({
+          source: 'github',
+          trust: 'official',
+          summary: `Repo pushed: ${item.name}`,
+          detail: item.html_url,
+          at,
+        });
+      }
     }
     state.repos[item.name] = item.pushed_at;
   }
@@ -227,6 +257,15 @@ function matchesKeyword(text: string): boolean {
  * only in a GitHub repo, and the rules for that contest say plainly not to
  * infer the referee from who posts in a room). So every finding out of this
  * function is `unverified`, unconditionally, regardless of who sent it.
+ *
+ * Each room baselines independently: a room with no stored seq yet has no
+ * "since" to watch forward from, so its very first `fetchRoom` call returns
+ * whatever the last ~200 messages happen to be — matching those against the
+ * keyword list would flag old chatter as a fresh finding. So a room with no
+ * prior seq just records the highest seq it saw and reports nothing for
+ * that room this run; a room that already has a baseline is checked
+ * normally. This is independent per room and per source: a fresh room
+ * baselining does not suppress GitHub or another, already-baselined room.
  */
 export async function checkRooms(state: WatchState, opts: WatchOpts = {}): Promise<Finding[]> {
   const doFetch = opts.fetchImpl;
@@ -236,6 +275,7 @@ export async function checkRooms(state: WatchState, opts: WatchOpts = {}): Promi
 
   for (const room of ROOMS) {
     const since = state.rooms[room];
+    const firstRunForRoom = since === undefined;
     let messages: RoomMessage[];
     try {
       messages = await fetchRoom(room, { since, fetchImpl: doFetch });
@@ -248,9 +288,11 @@ export async function checkRooms(state: WatchState, opts: WatchOpts = {}): Promi
     const matches: RoomMessage[] = [];
     for (const m of messages) {
       if (m.seq > highest) highest = m.seq;
-      if (matchesKeyword(m.text)) matches.push(m);
+      if (!firstRunForRoom && matchesKeyword(m.text)) matches.push(m);
     }
     state.rooms[room] = highest;
+
+    if (firstRunForRoom) continue;
 
     const capped = matches.slice(0, MAX_CHAT_FINDINGS_PER_ROOM);
     for (const m of capped) {
@@ -276,18 +318,32 @@ export async function checkRooms(state: WatchState, opts: WatchOpts = {}): Promi
   return findings;
 }
 
+/** Which sources had no baseline before this run and were only recorded, not compared. */
+export type Baselined = {
+  github: boolean;
+  repoCount: number;
+  rooms: string[];
+};
+
 /**
  * Runs all three checks and never lets one failing source cost the others
  * their turn — the same posture `confirmRoom` takes toward a degraded
  * server. State is saved exactly once, at the end, whether or not any
  * individual check failed, so a source that is down does not also roll
  * back progress the other sources made this run.
+ *
+ * GitHub and each room baseline independently (see the comments on
+ * `checkGitHub` and `checkRooms`); this snapshots each source's state
+ * before and after its check to say which ones were only just baselined,
+ * so the caller can tell the user plainly why a run came back quiet.
  */
 export async function runWatch(
   opts: WatchOpts = {},
-): Promise<{ findings: Finding[]; state: WatchState }> {
+): Promise<{ findings: Finding[]; state: WatchState; baselined: Baselined }> {
   const state = loadWatchState();
   const findings: Finding[] = [];
+  const hadRepoBaseline = Object.keys(state.repos).length > 0;
+  const roomsWithBaseline = new Set(Object.keys(state.rooms));
 
   try {
     findings.push(...(await checkGitHub(state, opts)));
@@ -308,5 +364,11 @@ export async function runWatch(
   const nowMs = opts.nowMs ?? Date.now;
   state.last_run = new Date(nowMs()).toISOString();
   saveWatchState(state);
-  return { findings, state };
+
+  const baselined: Baselined = {
+    github: !hadRepoBaseline && Object.keys(state.repos).length > 0,
+    repoCount: Object.keys(state.repos).length,
+    rooms: Object.keys(state.rooms).filter((r) => !roomsWithBaseline.has(r)),
+  };
+  return { findings, state, baselined };
 }
