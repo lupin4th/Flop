@@ -108,3 +108,22 @@ export function loadIdentity(passphrase: string): { did: string; privateKey: Key
 export function identityExists(): boolean {
   return existsSync(keyPath());
 }
+
+/**
+ * Reads just the public `did` out of the key file, without touching the
+ * passphrase or the encrypted private key at all. `did` sits outside the
+ * `cipher` block on purpose (see `StoredKey`), so a caller that only needs
+ * to know "which DID is mine" — e.g. the `mine` command, deciding which
+ * exported messages are ours — never has to prompt for a passphrase or
+ * decrypt anything. Returns undefined if there is no key file, or it does
+ * not parse.
+ */
+export function readStoredDid(): string | undefined {
+  if (!existsSync(keyPath())) return undefined;
+  try {
+    const stored = JSON.parse(readFileSync(keyPath(), 'utf8')) as Partial<StoredKey>;
+    return typeof stored.did === 'string' ? stored.did : undefined;
+  } catch {
+    return undefined;
+  }
+}

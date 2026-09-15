@@ -1,19 +1,22 @@
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { archiveDir, ensureHome } from './paths.js';
-import { fetchRoom, type RoomMessage } from './client.js';
+import { exportRoom, type RoomMessage } from './client.js';
 import { loadReceipts, type Receipt } from './receipts.js';
 import { appendJsonLine, readJsonLines } from './jsonl.js';
 import { matchesReceipt } from './confirm.js';
 
 /**
- * The server discards the signature after checking it, so a reader cannot
- * re-verify anyone else's message offline. Saying "verified" about someone
- * else's message would overstate what this tool can prove.
+ * The server discards the signature after checking it on the live read API,
+ * so a reader normally cannot re-verify anyone else's message offline.
+ * `/export`, which `archiveRoom` uses, is the one endpoint that still
+ * carries `sig` — so an archived row keeps it (when the server supplied
+ * one) even though `self_verified`/`server_attested` below still reflect
+ * only what this tool itself can vouch for.
  */
 export type Trust = 'self_verified' | 'server_attested' | 'unsigned';
 
-export type ArchivedMessage = RoomMessage & { trust: Trust };
+export type ArchivedMessage = RoomMessage & { trust: Trust; sig?: string };
 
 export function labelMessage(m: RoomMessage, receipts: Receipt[]): Trust {
   if (!m.from.startsWith('did:key:')) return 'unsigned';
@@ -32,9 +35,9 @@ function seenSeqs(room: string): Set<number> {
 
 export async function archiveRoom(
   room: string,
-  opts: { base?: string; limit?: number; fetchImpl?: typeof fetch } = {},
+  opts: { base?: string; fetchImpl?: typeof fetch } = {},
 ): Promise<{ path: string; written: number }> {
-  const messages = await fetchRoom(room, opts);
+  const messages = await exportRoom(room, opts);
   const receipts = loadReceipts();
   ensureHome();
   mkdirSync(archiveDir(room), { recursive: true, mode: 0o700 });

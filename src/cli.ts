@@ -2,8 +2,11 @@
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { resolve } from 'node:path';
-import { generateIdentity, saveIdentity, loadIdentity, identityExists } from './keystore.js';
+import { resolve, join, dirname } from 'node:path';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import {
+  generateIdentity, saveIdentity, loadIdentity, identityExists, readStoredDid,
+} from './keystore.js';
 import {
   createReceipt, appendReceipt, loadReceipts, readReceiptLog, verifyReceipt,
 } from './receipts.js';
@@ -13,6 +16,16 @@ import { DEFAULT_BASE, fetchLatestSeq } from './client.js';
 import { assertSafeRoom } from './room.js';
 import { confirmRoom, loadConfirmations, unconfirmedReceipts } from './confirm.js';
 import { runWatch } from './watch.js';
+import { captureSelfEvidence, verifySelfEvidence } from './evidence.js';
+
+/**
+ * Rooms captured by `mine` even if the user has never signed anything there
+ * yet — the three rooms this project already cares about (see watch.ts).
+ * `cmdMine` adds every room the user actually has a receipt for on top of
+ * this, so the command follows the user's real footprint rather than a list
+ * that goes stale.
+ */
+const DEFAULT_MINE_ROOMS = ['technocore', 'flop_labs', 'technocore-genesis'];
 
 export type Io = {
   out: (s: string) => void;
@@ -27,6 +40,7 @@ const USAGE = `Usage:
   technocore-attest confirm <room>         watch a room and confirm the server served your unconfirmed messages
   technocore-attest report                 summarise receipts and archives
   technocore-attest watch                  one-shot check of GitHub, flop.finance and chat for a testnet/faucet announcement
+  technocore-attest mine [--out <path>]    capture and commit self-checking evidence of your own presence
 
 This tool never sends a message for you. \`sign\` prints a URL; opening it is your call.
 Never paste a private key, seed phrase or API key into a public room.`;
@@ -163,6 +177,46 @@ async function cmdWatch(io: Io): Promise<number> {
   return 10;
 }
 
+/**
+ * Reads only: gets the DID straight from the key file's plaintext `did`
+ * field (see `readStoredDid`), never decrypts the private key, prompts for
+ * no passphrase, and signs nothing. `captureSelfEvidence` in turn only
+ * reads `/export`. Nothing this command touches can post to technocore.
+ */
+async function cmdMine(io: Io, outPath?: string): Promise<number> {
+  const did = readStoredDid();
+  if (!did) {
+    io.out('No identity found. Run `technocore-attest keygen` first — `mine` only needs the public DID, never the passphrase or the private key.');
+    return 1;
+  }
+  const receipts = loadReceipts();
+  const rooms = [...new Set([...DEFAULT_MINE_ROOMS, ...receipts.map((r) => r.room)])];
+  const evidence = await captureSelfEvidence(did, rooms, { base: DEFAULT_BASE });
+
+  const path = outPath ?? join('evidence', `${new Date().toISOString().slice(0, 10)}.json`);
+  const dir = dirname(path);
+  if (dir && dir !== '.') mkdirSync(dir, { recursive: true });
+  writeFileSync(path, JSON.stringify(evidence, null, 2) + '\n');
+
+  const failedRooms = evidence.rooms.filter((r) => r.message_count === -1).map((r) => r.room);
+  const ownMessages = evidence.rooms.reduce((sum, r) => sum + r.mine.length, 0);
+  const { checked, valid, invalid } = verifySelfEvidence(evidence);
+
+  io.out(
+    `${evidence.rooms.length} room(s) captured, ${ownMessages} own message(s) found, ${valid}/${checked} signature(s) valid.`,
+  );
+  if (failedRooms.length > 0) {
+    io.out(`Could not reach: ${failedRooms.join(', ')} (recorded, not fatal to the others).`);
+  }
+  io.out(`Wrote ${path}`);
+
+  if (invalid.length > 0) {
+    io.out(`FAILED verification for: ${invalid.join(', ')} — the captured artifact is corrupt.`);
+    return 1;
+  }
+  return 0;
+}
+
 function cmdReport(io: Io): number {
   const { receipts, malformed } = readReceiptLog();
   const { confirmations } = loadConfirmations();
@@ -209,6 +263,11 @@ export async function run(argv: string[], io: Io): Promise<number> {
       return cmdReport(io);
     case 'watch':
       return cmdWatch(io);
+    case 'mine': {
+      const idx = rest.indexOf('--out');
+      const out = idx !== -1 ? rest[idx + 1] : undefined;
+      return cmdMine(io, out);
+    }
     default:
       io.out(USAGE);
       return 1;

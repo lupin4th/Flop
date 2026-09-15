@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, appendFileSync } from 'node:fs';
+import { mkdtempSync, appendFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { run } from './cli.js';
 import { receiptsPath } from './paths.js';
+import { readStoredDid, loadIdentity } from './keystore.js';
+import { signPayload } from './verify.js';
 
 function harness(answers: string[] = []) {
   const lines: string[] = [];
@@ -231,6 +233,113 @@ test('watch exits 10 and prints official findings once a baseline exists and a n
     const code = await run(['watch'], h.io);
     assert.equal(code, 10);
     assert.match(h.lines.join('\n'), /testnet-faucet/);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+// --- mine -------------------------------------------------------------
+
+function fakeExportFetchFor(byRoom: Record<string, string>) {
+  return (async (url: string | URL) => {
+    const s = String(url);
+    for (const [room, body] of Object.entries(byRoom)) {
+      if (s.includes(`/r/${room}/export`)) {
+        return new Response(body, { status: 200 });
+      }
+    }
+    // Any room not given an explicit body (i.e. the other defaults) is an
+    // empty room — a legitimate, common case that must not fail the run.
+    return new Response('', { status: 200 });
+  }) as unknown as typeof fetch;
+}
+
+test('mine refuses to run before an identity exists', async () => {
+  isolate();
+  const h = harness();
+  const code = await run(['mine'], h.io);
+  assert.notEqual(code, 0);
+  assert.match(h.lines.join('\n'), /No identity/i);
+});
+
+test('mine writes the evidence file and exits 0 when every stored signature verifies', async () => {
+  isolate();
+  await run(['keygen'], harness(['pw', 'pw']).io);
+  const did = readStoredDid()!;
+  const { privateKey } = loadIdentity('pw');
+  const sig = signPayload(privateKey, 'technocore', 5, 'hello there');
+  const body =
+    JSON.stringify({ seq: 1, ts: 't1', from: '~someone-else', text: 'noise' }) +
+    '\n' +
+    JSON.stringify({ seq: 2, ts: 't2', from: did, text: 'hello there', nonce: 5, sig }) +
+    '\n';
+  const originalFetch = global.fetch;
+  global.fetch = fakeExportFetchFor({ technocore: body });
+  try {
+    const outPath = join(mkdtempSync(join(tmpdir(), 'attest-out-')), 'evidence.json');
+    const h = harness();
+    const code = await run(['mine', '--out', outPath], h.io);
+    assert.equal(code, 0);
+    assert.equal(existsSync(outPath), true);
+    const written = JSON.parse(readFileSync(outPath, 'utf8'));
+    assert.equal(written.v, 1);
+    assert.equal(written.did, did);
+    const technocore = written.rooms.find((r: { room: string }) => r.room === 'technocore');
+    assert.equal(technocore.mine.length, 1);
+    assert.equal(technocore.mine[0].sig, sig);
+    // pretty-printed with a trailing newline, so diffs stay readable
+    const raw = readFileSync(outPath, 'utf8');
+    assert.match(raw, /\n$/);
+    assert.match(raw, /\n {2}"v": 1/);
+    assert.match(h.lines.join('\n'), /1\/1|valid/i);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('mine exits non-zero when a stored signature fails verification', async () => {
+  isolate();
+  await run(['keygen'], harness(['pw', 'pw']).io);
+  const did = readStoredDid()!;
+  const { privateKey } = loadIdentity('pw');
+  const sig = signPayload(privateKey, 'technocore', 5, 'hello there');
+  // The server now serves different text under the same nonce/sig — as if
+  // the room (or a captured copy of it) had been tampered with.
+  const body =
+    JSON.stringify({ seq: 2, ts: 't2', from: did, text: 'TAMPERED', nonce: 5, sig }) + '\n';
+  const originalFetch = global.fetch;
+  global.fetch = fakeExportFetchFor({ technocore: body });
+  try {
+    const outPath = join(mkdtempSync(join(tmpdir(), 'attest-out-')), 'evidence.json');
+    const h = harness();
+    const code = await run(['mine', '--out', outPath], h.io);
+    assert.notEqual(code, 0);
+    assert.equal(existsSync(outPath), true);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('mine captures every room the user has a receipt for, in addition to the defaults', async () => {
+  isolate();
+  await run(['keygen'], harness(['pw', 'pw']).io);
+  await run(['sign', 'my-custom-room', 'hi'], harness(['pw']).io);
+  const originalFetch = global.fetch;
+  const seenRooms: string[] = [];
+  global.fetch = (async (url: string | URL) => {
+    const s = String(url);
+    const m = s.match(/\/r\/([^/]+)\/export/);
+    if (m) seenRooms.push(m[1]);
+    return new Response('', { status: 200 });
+  }) as unknown as typeof fetch;
+  try {
+    const outPath = join(mkdtempSync(join(tmpdir(), 'attest-out-')), 'evidence.json');
+    const h = harness();
+    await run(['mine', '--out', outPath], h.io);
+    assert.ok(seenRooms.includes('my-custom-room'));
+    assert.ok(seenRooms.includes('technocore'));
+    assert.ok(seenRooms.includes('flop_labs'));
+    assert.ok(seenRooms.includes('technocore-genesis'));
   } finally {
     global.fetch = originalFetch;
   }

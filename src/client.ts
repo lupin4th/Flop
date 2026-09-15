@@ -75,6 +75,17 @@ export function parseRoomResponse(body: unknown, rawNonceTexts?: string[]): Room
   });
 }
 
+/**
+ * Recovers the exact decimal text of every `"nonce":<digits>` occurrence in
+ * raw response text, in order of appearance — before `JSON.parse` gets a
+ * chance to round any of them. Shared by `fetchRoom` and `exportRoom` so
+ * this invariant (nanosecond nonces exceed `Number.MAX_SAFE_INTEGER`) is
+ * kept in exactly one place.
+ */
+function extractRawNonceTexts(rawText: string): string[] {
+  return [...rawText.matchAll(/"nonce"\s*:\s*(\d+)/g)].map((m) => m[1]);
+}
+
 /** The server's documented long-poll wait range, in seconds. */
 const MIN_WAIT = 0;
 const MAX_WAIT = 10;
@@ -113,7 +124,7 @@ export async function fetchRoom(
   } catch {
     throw new Error(`GET ${url.pathname} returned a non-JSON body`);
   }
-  const rawNonceTexts = [...text.matchAll(/"nonce"\s*:\s*(\d+)/g)].map((m) => m[1]);
+  const rawNonceTexts = extractRawNonceTexts(text);
   return parseRoomResponse(body, rawNonceTexts);
 }
 
@@ -127,4 +138,87 @@ export async function fetchLatestSeq(
 ): Promise<number> {
   const messages = await fetchRoom(room, { ...opts, limit: 1 });
   return messages.reduce((max, m) => (m.seq > max ? m.seq : max), 0);
+}
+
+/**
+ * A room message as it appears in a full `/export` dump, which — unlike
+ * `?format=json` — includes the server-checked `sig` for each line. This is
+ * what makes an export independently verifiable offline: `?format=json`
+ * throws the signature away after checking it once, server-side.
+ */
+export type ExportedMessage = RoomMessage & { sig?: string };
+
+/**
+ * Parses the exact JSONL body of a `/export` response. One message per line;
+ * a blank or malformed line is skipped rather than aborting the whole parse,
+ * since the ring buffer is large and a single corrupt line must not cost the
+ * rest of the capture.
+ *
+ * Each line is run through `parseRoomResponse` — the same shape/nonce-recovery
+ * logic `fetchRoom` uses — wrapped as a single-element `messages` array, so
+ * nonce handling (recovering the exact decimal text before `JSON.parse` can
+ * round it) lives in exactly one place rather than being reimplemented here.
+ */
+export function parseExportBody(body: string): ExportedMessage[] {
+  const out: ExportedMessage[] = [];
+  for (const line of body.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed === '') continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+    const rawNonceTexts = extractRawNonceTexts(trimmed);
+    const shaped = parseRoomResponse({ messages: [parsed] }, rawNonceTexts);
+    if (shaped.length === 0) continue;
+    const msg: ExportedMessage = { ...shaped[0] };
+    const sig = (parsed as Record<string, unknown>).sig;
+    if (typeof sig === 'string') msg.sig = sig;
+    out.push(msg);
+  }
+  return out;
+}
+
+async function fetchExportBody(
+  room: string,
+  opts: { base?: string; fetchImpl?: typeof fetch } = {},
+): Promise<string> {
+  assertSafeRoom(room);
+  const base = opts.base ?? DEFAULT_BASE;
+  const doFetch = opts.fetchImpl ?? fetch;
+  const url = new URL(`${base}/r/${room}/export`);
+  const res = await doFetch(url, { headers: { accept: 'application/x-ndjson' } });
+  if (!res.ok) throw new Error(`GET ${url.pathname} failed: ${res.status}`);
+  return res.text();
+}
+
+/**
+ * Fetches the entire ring for `room` as JSONL via `/export` — the whole
+ * buffer (5-10 MB per room), not the ~200-message window `fetchRoom` sees.
+ * On a busy room `?format=json` covers only a few seconds; `/export` is the
+ * only endpoint that can prove the server served a message hours or days
+ * ago, which is the entire point of an archive.
+ */
+export async function exportRoom(
+  room: string,
+  opts: { base?: string; fetchImpl?: typeof fetch } = {},
+): Promise<ExportedMessage[]> {
+  const body = await fetchExportBody(room, opts);
+  return parseExportBody(body);
+}
+
+/**
+ * Like `exportRoom`, but also returns the exact raw response body. Self
+ * -evidence capture needs a hash of the precise bytes the server sent (proof
+ * of exactly what was read), which is lost once the body is parsed into
+ * messages — so this fetches once and hands back both.
+ */
+export async function exportRoomWithBody(
+  room: string,
+  opts: { base?: string; fetchImpl?: typeof fetch } = {},
+): Promise<{ body: string; messages: ExportedMessage[] }> {
+  const body = await fetchExportBody(room, opts);
+  return { body, messages: parseExportBody(body) };
 }

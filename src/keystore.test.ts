@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, statSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { generateIdentity, saveIdentity, loadIdentity, identityExists } from './keystore.js';
+import {
+  generateIdentity, saveIdentity, loadIdentity, identityExists, readStoredDid,
+} from './keystore.js';
 import { signPayload, verifyPayload } from './verify.js';
 import { keyPath } from './paths.js';
 
@@ -97,6 +99,18 @@ test('loadIdentity throws on N=0 in KDF parameters', () => {
   const edited = raw.replace('"N": 32768', '"N": 0');
   writeFileSync(keyPath(), edited, { mode: 0o600 });
   assert.throws(() => loadIdentity('pw'), /KDF parameters/);
+});
+
+test('readStoredDid returns undefined when no key file exists', () => {
+  isolate();
+  assert.equal(readStoredDid(), undefined);
+});
+
+test('readStoredDid returns the did without needing a passphrase', () => {
+  isolate();
+  const { did, privateKey } = generateIdentity();
+  saveIdentity(privateKey, did, 'pw');
+  assert.equal(readStoredDid(), did);
 });
 
 test('loadIdentity throws on N=2^25 in KDF parameters', () => {

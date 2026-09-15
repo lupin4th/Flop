@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseRoomResponse, fetchRoom, fetchLatestSeq } from './client.js';
+import { parseRoomResponse, fetchRoom, fetchLatestSeq, exportRoom } from './client.js';
 
 test('parses well-formed messages', () => {
   const msgs = parseRoomResponse({
@@ -254,4 +254,69 @@ test('fetchRoom falls back to the parsed (rounded) nonce when raw and parsed cou
   const msgs = await fetchRoom('lobby', { fetchImpl: fakeFetch as unknown as typeof fetch });
   assert.equal(msgs.length, 1);
   assert.equal(msgs[0].nonce, '5');
+});
+
+// --- exportRoom ------------------------------------------------------------
+
+test('exportRoom parses JSONL and carries the sig field through', async () => {
+  const lines = [
+    JSON.stringify({ seq: 1, ts: 't1', from: '~anon', text: 'hi' }),
+    JSON.stringify({ seq: 2, ts: 't2', from: 'did:key:zAAA', text: 'yo', nonce: 9, sig: 'AbC123' }),
+  ];
+  let seen = '';
+  const fakeFetch = async (url: string | URL) => {
+    seen = String(url);
+    return new Response(lines.join('\n') + '\n', { status: 200 });
+  };
+  const msgs = await exportRoom('lobby', { fetchImpl: fakeFetch as unknown as typeof fetch });
+  assert.match(seen, /\/r\/lobby\/export/);
+  assert.equal(msgs.length, 2);
+  assert.equal(msgs[0].sig, undefined);
+  assert.equal(msgs[1].sig, 'AbC123');
+  assert.equal(msgs[1].nonce, '9');
+});
+
+test('exportRoom recovers a nanosecond nonce as exact decimal text, not a rounded number', async () => {
+  const bigNonce = '1789348196321255900';
+  const line = `{"seq":1,"ts":"t","from":"did:key:zAAA","text":"hi","nonce":${bigNonce},"sig":"s"}`;
+  const fakeFetch = async () => new Response(line + '\n', { status: 200 });
+  const msgs = await exportRoom('lobby', { fetchImpl: fakeFetch as unknown as typeof fetch });
+  assert.equal(msgs.length, 1);
+  assert.equal(msgs[0].nonce, bigNonce);
+  assert.notEqual(msgs[0].nonce, String(Number(bigNonce)));
+});
+
+test('exportRoom rejects an unsafe room name before making a request', async () => {
+  let called = false;
+  const fakeFetch = async () => {
+    called = true;
+    return new Response('');
+  };
+  await assert.rejects(
+    () => exportRoom('../etc', { fetchImpl: fakeFetch as unknown as typeof fetch }),
+    /unsafe room name/,
+  );
+  assert.equal(called, false);
+});
+
+test('exportRoom throws on a non-ok response', async () => {
+  const fakeFetch = async () => new Response('nope', { status: 500 });
+  await assert.rejects(
+    () => exportRoom('lobby', { fetchImpl: fakeFetch as unknown as typeof fetch }),
+    /500/,
+  );
+});
+
+test('exportRoom skips a blank line and a malformed line rather than throwing', async () => {
+  const lines = [
+    JSON.stringify({ seq: 1, ts: 't1', from: '~anon', text: 'ok one' }),
+    '',
+    'not json at all {{{',
+    JSON.stringify({ seq: 3, ts: 't3', from: '~anon', text: 'ok two' }),
+  ];
+  const fakeFetch = async () => new Response(lines.join('\n') + '\n', { status: 200 });
+  const msgs = await exportRoom('lobby', { fetchImpl: fakeFetch as unknown as typeof fetch });
+  assert.equal(msgs.length, 2);
+  assert.equal(msgs[0].seq, 1);
+  assert.equal(msgs[1].seq, 3);
 });

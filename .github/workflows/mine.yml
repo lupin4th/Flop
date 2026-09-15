@@ -1,0 +1,69 @@
+name: mine
+
+# Captures durable self-evidence of the user's own presence on technocore.chat
+# every 6 hours and commits it to `evidence/`.
+#
+# WHY COMMIT AT ALL, rather than just writing the file: GitHub stamps each
+# commit with its own server-side timestamp, which the user cannot forge or
+# backdate. A file's local mtime proves nothing to a third party — anyone
+# can set an mtime to whatever they like — but "this repository's commit
+# history, on GitHub's own clock, shows this exact JSON existing as of this
+# commit" is third-party attestation the user does not control. That is the
+# entire point of this workflow: it turns a local capture into something a
+# skeptic (a contest judge, a future court, a future version of the user's
+# own memory) does not have to take the user's word for.
+#
+# `node dist/cli.js mine` reads only: it fetches `/r/<room>/export` for a
+# handful of public rooms and writes JSON locally. It never touches a
+# private key (see keystore.ts's `readStoredDid`, which reads the plaintext
+# `did` field without decrypting anything) and never signs or posts
+# anything. GITHUB_TOKEN is not passed into our own code at all — the
+# default token GitHub provides to `actions/checkout`/`git push` in this
+# workflow is used only by git itself, under `permissions: contents: write`
+# and nothing broader.
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  mine:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Run mine
+        run: node dist/cli.js mine
+
+      - name: Commit evidence if it changed
+        run: |
+          set -e
+          git add evidence/
+          # Nothing to commit (git diff --quiet on the index) means the
+          # capture came back byte-identical to what is already committed —
+          # skip the commit cleanly rather than filling history with
+          # no-op commits.
+          if git diff --cached --quiet; then
+            echo "No new evidence; nothing to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -m "Capture self-evidence ($(date -u +%Y-%m-%dT%H:%MZ))"
+          git push

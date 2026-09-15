@@ -40,16 +40,19 @@ test('a receipt that does not match the message text is not self_verified', () =
   assert.equal(labelMessage(m, [r]), 'server_attested');
 });
 
+// archiveRoom now reads the full ring via GET /r/<room>/export (JSONL, one
+// message per line) rather than the ~200-message ?format=json window, so
+// these fakeFetch bodies serve JSONL — the shape /export actually returns —
+// instead of the old `{"messages": [...]}` envelope.
+
 test('archiveRoom writes labelled messages and reloads them', async () => {
   isolate();
   const fakeFetch = async () =>
     new Response(
-      JSON.stringify({
-        messages: [
-          { seq: 1, ts: '1', from: '~a', text: 'hi' },
-          { seq: 2, ts: '2', from: 'did:key:zAAA', text: 'yo', nonce: 3 },
-        ],
-      }),
+      [
+        JSON.stringify({ seq: 1, ts: '1', from: '~a', text: 'hi' }),
+        JSON.stringify({ seq: 2, ts: '2', from: 'did:key:zAAA', text: 'yo', nonce: 3 }),
+      ].join('\n') + '\n',
       { status: 200 },
     );
   const { written } = await archiveRoom('lobby', {
@@ -65,15 +68,31 @@ test('archiveRoom writes labelled messages and reloads them', async () => {
 test('archiving twice does not duplicate messages already recorded', async () => {
   isolate();
   const fakeFetch = async () =>
-    new Response(
-      JSON.stringify({ messages: [{ seq: 1, ts: '1', from: '~a', text: 'hi' }] }),
-      { status: 200 },
-    );
+    new Response(JSON.stringify({ seq: 1, ts: '1', from: '~a', text: 'hi' }) + '\n', {
+      status: 200,
+    });
   const opts = { fetchImpl: fakeFetch as unknown as typeof fetch };
   await archiveRoom('lobby', opts);
   const second = await archiveRoom('lobby', opts);
   assert.equal(second.written, 0);
   assert.equal(loadArchive('lobby').length, 1);
+});
+
+test('archiveRoom carries the sig field from /export through to the archived row', async () => {
+  isolate();
+  const fakeFetch = async (url: string | URL) => {
+    assert.match(String(url), /\/export\b/);
+    return new Response(
+      JSON.stringify({
+        seq: 1, ts: '1', from: 'did:key:zAAA', text: 'yo', nonce: 3, sig: 'the-server-checked-sig',
+      }) + '\n',
+      { status: 200 },
+    );
+  };
+  await archiveRoom('lobby', { fetchImpl: fakeFetch as unknown as typeof fetch });
+  const rows = loadArchive('lobby');
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].sig, 'the-server-checked-sig');
 });
 
 test('a message matches one of our own receipts even with a nonce beyond Number.MAX_SAFE_INTEGER', () => {
