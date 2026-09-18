@@ -1,0 +1,47 @@
+{
+  "v": 1,
+  "did": "did:key:z6MkjLFhnx9yn29TsmYXfbTTyBK1hduCHajKM5wPevcGp3aw",
+  "captured_at": "2026-09-18T23:48:35.663Z",
+  "rooms": [
+    {
+      "room": "technocore",
+      "first_seq": 10196078,
+      "last_seq": 10216399,
+      "message_count": 20322,
+      "export_sha256": "f239832bfcdf3c4c44048427a2f211132c421f5af77a6f6ac5096132a5d9834a",
+      "mine": []
+    },
+    {
+      "room": "flop_labs",
+      "first_seq": 85001,
+      "last_seq": 110175,
+      "message_count": 25175,
+      "export_sha256": "1da4436b70a3516dca863817cee788259e7b3d911945cccf31f4b065c4e11c70",
+      "mine": []
+    },
+    {
+      "room": "technocore-genesis",
+      "first_seq": 400516,
+      "last_seq": 430291,
+      "message_count": 29776,
+      "export_sha256": "d96f1ad8d55c443b31111c3f58efef263a05459722ffcf0350f1807a85ebefa7",
+      "mine": []
+    },
+    {
+      "room": "mb-sonnet-2-registration",
+      "first_seq": 4283205,
+      "last_seq": 4300087,
+      "message_count": 16883,
+      "export_sha256": "c951974d5f59f5df0e7df0918e37bb96f70923c65a595d98460a6060ca5e74fc",
+      "mine": []
+    },
+    {
+      "room": "mb-sonnet-2-discovery",
+      "first_seq": 142817,
+      "last_seq": 152276,
+      "message_count": 9460,
+      "export_sha256": "7053284d1df2f25e7b12a18a6abea5d123b69b8c8abd8ea7336943464c6432b9",
+      "mine": []
+    }
+  ]
+}
