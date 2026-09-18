@@ -27,6 +27,16 @@ export type WatchState = {
   pages: Record<string, string>;
   rooms: Record<string, number>;
   last_run: string;
+  /**
+   * Newest commit `sha` seen per repo, used to report only the commits
+   * that are new since the last run when a push is detected. Optional —
+   * not required — so that a state file written by every version of this
+   * tool before this field existed (no `repo_commits` key at all) loads
+   * and behaves exactly as it did before: missing per-repo entries are
+   * treated as "no baseline yet" (see `checkGitHub`), the same posture
+   * `repos` and `rooms` already take toward an unseen key.
+   */
+  repo_commits?: Record<string, string>;
 };
 
 type WatchOpts = { fetchImpl?: typeof fetch; nowMs?: () => number };
@@ -115,7 +125,11 @@ function isWatchState(value: unknown): value is WatchState {
     typeof s.last_run === 'string' &&
     isRecordOf(s.repos, isString) &&
     isRecordOf(s.pages, isString) &&
-    isRecordOf(s.rooms, isNumber)
+    isRecordOf(s.rooms, isNumber) &&
+    // `repo_commits` postdates every state file already on disk, so a
+    // state written before this field existed simply lacks the key —
+    // that must load cleanly, not fail validation.
+    (s.repo_commits === undefined || isRecordOf(s.repo_commits, isString))
   );
 }
 
@@ -160,6 +174,85 @@ function isGhRepo(value: unknown): value is GhRepo {
   );
 }
 
+type GhCommit = { sha: string; commit: { message: string } };
+
+function isGhCommit(value: unknown): value is GhCommit {
+  if (typeof value !== 'object' || value === null) return false;
+  const c = value as Record<string, unknown>;
+  if (typeof c.sha !== 'string') return false;
+  if (typeof c.commit !== 'object' || c.commit === null) return false;
+  const commit = c.commit as Record<string, unknown>;
+  return typeof commit.message === 'string';
+}
+
+/** One noisy multi-line commit message must not blow up the issue body. */
+const MAX_COMMIT_SUBJECT_LEN = 100;
+/** Cap how many subjects are listed per push; the rest are just counted. */
+const MAX_COMMITS_LISTED = 5;
+
+function commitSubject(message: string): string {
+  const line = message.split('\n', 1)[0].trim();
+  return line.length > MAX_COMMIT_SUBJECT_LEN
+    ? line.slice(0, MAX_COMMIT_SUBJECT_LEN - 1) + '…'
+    : line;
+}
+
+type CommitFetchResult =
+  | { ok: true; subjects: string[]; newestSha: string }
+  | { ok: false };
+
+/**
+ * Fetches a repo's recent commits and returns the subjects of whatever is
+ * new since `lastSeenSha`. Only ever called from `checkGitHub` for a repo
+ * whose `pushed_at` just changed — see the comment there for why this must
+ * not be widened into a per-repo poll on every run.
+ *
+ * `lastSeenSha === undefined` means this repo has no commit baseline yet
+ * (either truly new, or a state file predating `repo_commits`): the caller
+ * treats that as first-run baselining, so this just hands back the newest
+ * sha with no subjects to report.
+ *
+ * If `lastSeenSha` isn't found in the page of commits returned (the repo
+ * moved more than `per_page` commits, or was force-pushed), there is no
+ * reliable diff to compute, so this falls back to reporting just the
+ * newest commit rather than guessing at a range.
+ */
+async function fetchNewCommitSubjects(
+  repoName: string,
+  lastSeenSha: string | undefined,
+  doFetch: typeof fetch,
+): Promise<CommitFetchResult> {
+  try {
+    const res = await doFetch(`https://api.github.com/repos/flop-labs/${repoName}/commits?per_page=10`, {
+      headers: { accept: 'application/vnd.github+json' },
+    });
+    if (!res.ok) return { ok: false };
+    const body: unknown = await res.json();
+    if (!Array.isArray(body)) return { ok: false };
+    const commits = body.filter(isGhCommit);
+    if (commits.length === 0) return { ok: false };
+
+    const newestSha = commits[0].sha;
+    if (lastSeenSha === undefined) {
+      return { ok: true, subjects: [], newestSha };
+    }
+    const idx = commits.findIndex((c) => c.sha === lastSeenSha);
+    const newCommits = idx === -1 ? commits.slice(0, 1) : commits.slice(0, idx);
+    return { ok: true, subjects: newCommits.map((c) => commitSubject(c.commit.message)), newestSha };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function formatPushFinding(repoName: string, subjects: string[]): string {
+  if (subjects.length === 0) return `Repo pushed: ${repoName}`;
+  const shown = subjects.slice(0, MAX_COMMITS_LISTED);
+  const remainder = subjects.length - shown.length;
+  const list = shown.map((s) => `"${s}"`).join('; ');
+  const remainderNote = remainder > 0 ? ` (+${remainder} more)` : '';
+  return `Repo pushed: ${repoName} — ${subjects.length} new commit(s): ${list}${remainderNote}`;
+}
+
 /**
  * A brand-new repo appearing under the org is the highest-value signal this
  * tool can see: FLOP Labs has a documented habit of standing up a dedicated
@@ -202,13 +295,42 @@ export async function checkGitHub(state: WatchState, opts: WatchOpts = {}): Prom
           at,
         });
       } else if (prior !== item.pushed_at) {
-        findings.push({
-          source: 'github',
-          trust: 'official',
-          summary: `Repo pushed: ${item.name}`,
-          detail: item.html_url,
-          at,
-        });
+        /*
+         * Commits are fetched here, inline, ONLY because `pushed_at`
+         * already told us this specific repo changed. Do not "simplify"
+         * this into fetching every repo's commits every run — unauthenticated
+         * GitHub allows 60 requests/hour, this tool sends no credentials,
+         * and this workflow runs every 30 minutes. One request per org
+         * (above) plus one request per repo that actually moved keeps an
+         * ordinary quiet run at exactly one request and a busy run at a
+         * handful; polling commits for every repo unconditionally would
+         * multiply that by the org's repo count on every single run and
+         * burn the rate limit for no reason.
+         */
+        const lastSha = state.repo_commits?.[item.name];
+        const result = await fetchNewCommitSubjects(item.name, lastSha, doFetch);
+        if (result.ok) {
+          state.repo_commits = state.repo_commits ?? {};
+          state.repo_commits[item.name] = result.newestSha;
+          findings.push({
+            source: 'github',
+            trust: 'official',
+            summary: formatPushFinding(item.name, result.subjects),
+            detail: item.html_url,
+            at,
+          });
+        } else {
+          // A failed or malformed commits fetch must not lose the push
+          // finding itself, and must not abort the page/room checks that
+          // follow this one in `runWatch` — fall back to the plain text.
+          findings.push({
+            source: 'github',
+            trust: 'official',
+            summary: `Repo pushed: ${item.name} (commit detail unavailable)`,
+            detail: item.html_url,
+            at,
+          });
+        }
       }
     }
     state.repos[item.name] = item.pushed_at;

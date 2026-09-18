@@ -170,6 +170,170 @@ test('checkGitHub emits exactly one finding on the run after a baseline, when on
   assert.match(secondFindings[0].summary, /testnet-faucet/);
 });
 
+// --- checkGitHub: commit detail on push ------------------------------------
+
+function ghCommit(sha: string, message: string) {
+  return { sha, commit: { message } };
+}
+
+/**
+ * Routes by URL: the org-repos list vs. a per-repo commits page. Tracks
+ * every URL requested so tests can assert exactly how many requests a run
+ * made — the whole point of the rate-limit behaviour under test.
+ */
+function githubFetch(opts: {
+  repos: Array<{ name: string; pushed_at: string; description: string | null; html_url: string }>;
+  commitsByRepo?: Record<string, unknown>;
+  calls: string[];
+}): typeof fetch {
+  return (async (url: string | URL) => {
+    const s = String(url);
+    opts.calls.push(s);
+    if (s.includes('/repos/flop-labs/') && s.includes('/commits')) {
+      const name = s.split('/repos/flop-labs/')[1].split('/commits')[0];
+      const commits = opts.commitsByRepo?.[name];
+      if (commits === undefined) return jsonResponse({ not: 'found' }, 404);
+      return jsonResponse(commits);
+    }
+    return jsonResponse(opts.repos);
+  }) as unknown as typeof fetch;
+}
+
+test('a changed pushed_at with a known prior sha reports only the commits above it', async () => {
+  isolate();
+  const state = freshState();
+  state.repos['tclk'] = '2026-01-01T00:00:00Z';
+  state.repo_commits = { tclk: 'sha-old' };
+  const calls: string[] = [];
+  const fetchImpl = githubFetch({
+    repos: [{ name: 'tclk', pushed_at: '2026-06-01T00:00:00Z', description: null, html_url: 'https://github.com/flop-labs/tclk' }],
+    commitsByRepo: {
+      tclk: [
+        ghCommit('sha-new-2', 'bump alpha warning\n\nlonger body here'),
+        ghCommit('sha-new-1', 'wire up settlement rail'),
+        ghCommit('sha-old', 'previous commit, already seen'),
+      ],
+    },
+    calls,
+  });
+  const findings = await checkGitHub(state, { fetchImpl });
+  assert.equal(findings.length, 1);
+  assert.match(findings[0].summary, /tclk/);
+  assert.match(findings[0].summary, /wire up settlement rail/);
+  assert.match(findings[0].summary, /bump alpha warning/);
+  assert.equal(/previous commit/.test(findings[0].summary), false);
+  assert.equal(state.repo_commits!['tclk'], 'sha-new-2');
+});
+
+test('a changed pushed_at whose stored sha is absent from the returned page reports just the newest commit', async () => {
+  isolate();
+  const state = freshState();
+  state.repos['tclk'] = '2026-01-01T00:00:00Z';
+  state.repo_commits = { tclk: 'sha-long-gone' };
+  const calls: string[] = [];
+  const fetchImpl = githubFetch({
+    repos: [{ name: 'tclk', pushed_at: '2026-06-01T00:00:00Z', description: null, html_url: 'https://github.com/flop-labs/tclk' }],
+    commitsByRepo: {
+      tclk: [
+        ghCommit('sha-new', 'force-pushed history'),
+        ghCommit('sha-other', 'unrelated older commit'),
+      ],
+    },
+    calls,
+  });
+  const findings = await checkGitHub(state, { fetchImpl });
+  assert.equal(findings.length, 1);
+  assert.match(findings[0].summary, /force-pushed history/);
+  assert.equal(/unrelated older commit/.test(findings[0].summary), false);
+  assert.equal(state.repo_commits!['tclk'], 'sha-new');
+});
+
+test('a repo with no stored sha records the newest sha and reports the push without commit detail', async () => {
+  isolate();
+  const state = freshState();
+  state.repos['tclk'] = '2026-01-01T00:00:00Z';
+  // No state.repo_commits at all yet — matches the shape written by every
+  // version of this tool before this feature existed.
+  const calls: string[] = [];
+  const fetchImpl = githubFetch({
+    repos: [{ name: 'tclk', pushed_at: '2026-06-01T00:00:00Z', description: null, html_url: 'https://github.com/flop-labs/tclk' }],
+    commitsByRepo: {
+      tclk: [ghCommit('sha-1', 'some commit subject')],
+    },
+    calls,
+  });
+  const findings = await checkGitHub(state, { fetchImpl });
+  assert.equal(findings.length, 1);
+  assert.match(findings[0].summary, /Repo pushed: tclk/);
+  assert.equal(/some commit subject/.test(findings[0].summary), false);
+  assert.equal(state.repo_commits!['tclk'], 'sha-1');
+});
+
+test('an unchanged pushed_at issues no commits request', async () => {
+  isolate();
+  const state = freshState();
+  state.repos['tclk'] = '2026-01-01T00:00:00Z';
+  state.repo_commits = { tclk: 'sha-old' };
+  const calls: string[] = [];
+  const fetchImpl = githubFetch({
+    repos: [{ name: 'tclk', pushed_at: '2026-01-01T00:00:00Z', description: null, html_url: 'https://github.com/flop-labs/tclk' }],
+    calls,
+  });
+  const findings = await checkGitHub(state, { fetchImpl });
+  assert.equal(findings.length, 0);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0], /orgs\/flop-labs\/repos/);
+});
+
+test('a failing commits fetch still yields the plain push finding and does not throw', async () => {
+  isolate();
+  const state = freshState();
+  state.repos['tclk'] = '2026-01-01T00:00:00Z';
+  state.repo_commits = { tclk: 'sha-old' };
+  const calls: string[] = [];
+  const fetchImpl = githubFetch({
+    repos: [{ name: 'tclk', pushed_at: '2026-06-01T00:00:00Z', description: null, html_url: 'https://github.com/flop-labs/tclk' }],
+    // no commitsByRepo entry for tclk -> the fake returns a 404
+    calls,
+  });
+  const findings = await checkGitHub(state, { fetchImpl });
+  assert.equal(findings.length, 1);
+  assert.match(findings[0].summary, /Repo pushed: tclk/);
+});
+
+test('more than five new commits are capped with a remainder count', async () => {
+  isolate();
+  const state = freshState();
+  state.repos['tclk'] = '2026-01-01T00:00:00Z';
+  state.repo_commits = { tclk: 'sha-base' };
+  const calls: string[] = [];
+  const newCommits = Array.from({ length: 7 }, (_, i) => ghCommit(`sha-${i}`, `commit subject ${i}`));
+  const fetchImpl = githubFetch({
+    repos: [{ name: 'tclk', pushed_at: '2026-06-01T00:00:00Z', description: null, html_url: 'https://github.com/flop-labs/tclk' }],
+    commitsByRepo: {
+      tclk: [...newCommits, ghCommit('sha-base', 'base commit')],
+    },
+    calls,
+  });
+  const findings = await checkGitHub(state, { fetchImpl });
+  assert.equal(findings.length, 1);
+  assert.match(findings[0].summary, /7 new commit/);
+  assert.match(findings[0].summary, /2 more/);
+});
+
+test('checkGitHub does not throw when state has no repo_commits at all (currently committed shape)', async () => {
+  isolate();
+  const state: WatchState = { v: 1, repos: { tclk: '2026-01-01T00:00:00Z' }, pages: {}, rooms: {}, last_run: new Date(0).toISOString() };
+  delete (state as { repo_commits?: unknown }).repo_commits;
+  const calls: string[] = [];
+  const fetchImpl = githubFetch({
+    repos: [{ name: 'tclk', pushed_at: '2026-06-01T00:00:00Z', description: null, html_url: 'https://github.com/flop-labs/tclk' }],
+    commitsByRepo: { tclk: [ghCommit('sha-1', 'a commit')] },
+    calls,
+  });
+  await assert.doesNotReject(checkGitHub(state, { fetchImpl }));
+});
+
 // --- checkPages -------------------------------------------------------------
 
 test('checkPages stores hashes and emits no findings on the first run', async () => {
