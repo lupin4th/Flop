@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, appendFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { run } from './cli.js';
@@ -416,6 +416,222 @@ test('mine captures every room the user has a receipt for, in addition to the de
     assert.ok(seenRooms.includes('technocore'));
     assert.ok(seenRooms.includes('flop_labs'));
     assert.ok(seenRooms.includes('technocore-genesis'));
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+// --- mine room discovery (self-sustaining across CI runs with no receipts) --
+
+function exportSpyFetch() {
+  const seenRooms: string[] = [];
+  const fetchImpl = (async (url: string | URL) => {
+    const s = String(url);
+    const m = s.match(/\/r\/([^/]+)\/export/);
+    if (m) seenRooms.push(m[1]);
+    return new Response('', { status: 200 });
+  }) as unknown as typeof fetch;
+  return { seenRooms, fetchImpl };
+}
+
+function withTempCwd<T>(setup: (dir: string) => void, fn: () => Promise<T>): Promise<T> {
+  const dir = mkdtempSync(join(tmpdir(), 'attest-cwd-'));
+  setup(dir);
+  const original = process.cwd();
+  process.chdir(dir);
+  return fn().finally(() => process.chdir(original));
+}
+
+test('mine captures rooms listed in the newest committed evidence file when no receipts or --rooms are given', async () => {
+  isolate();
+  const { did } = generateIdentity();
+  const { seenRooms, fetchImpl } = exportSpyFetch();
+  const originalFetch = global.fetch;
+  global.fetch = fetchImpl;
+  try {
+    await withTempCwd(
+      (cwd) => {
+        const evDir = join(cwd, 'evidence');
+        mkdirSync(evDir, { recursive: true });
+        writeFileSync(join(evDir, '2026-09-10.json'), JSON.stringify({ rooms: [{ room: 'old-room' }] }));
+        writeFileSync(
+          join(evDir, '2026-09-15.json'),
+          JSON.stringify({ rooms: [{ room: 'new-room-a' }, { room: 'new-room-b' }] }),
+        );
+      },
+      async () => {
+        const outPath = join(mkdtempSync(join(tmpdir(), 'attest-out-')), 'evidence.json');
+        const h = harness();
+        const code = await run(['mine', '--did', did, '--out', outPath], h.io);
+        assert.equal(code, 0);
+        assert.ok(seenRooms.includes('new-room-a'));
+        assert.ok(seenRooms.includes('new-room-b'));
+        assert.ok(!seenRooms.includes('old-room'));
+        assert.match(h.lines.join('\n'), /2026-09-15\.json/);
+      },
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('--rooms adds rooms on top of the ones discovered from the evidence file', async () => {
+  isolate();
+  const { did } = generateIdentity();
+  const { seenRooms, fetchImpl } = exportSpyFetch();
+  const originalFetch = global.fetch;
+  global.fetch = fetchImpl;
+  try {
+    await withTempCwd(
+      (cwd) => {
+        const evDir = join(cwd, 'evidence');
+        mkdirSync(evDir, { recursive: true });
+        writeFileSync(join(evDir, '2026-09-15.json'), JSON.stringify({ rooms: [{ room: 'evidence-room' }] }));
+      },
+      async () => {
+        const outPath = join(mkdtempSync(join(tmpdir(), 'attest-out-')), 'evidence.json');
+        const code = await run(
+          ['mine', '--did', did, '--out', outPath, '--rooms', 'flag-room'],
+          harness().io,
+        );
+        assert.equal(code, 0);
+        assert.ok(seenRooms.includes('evidence-room'));
+        assert.ok(seenRooms.includes('flag-room'));
+      },
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('TECHNOCORE_ROOMS is honoured when --rooms is absent', async () => {
+  isolate();
+  const { did } = generateIdentity();
+  const { seenRooms, fetchImpl } = exportSpyFetch();
+  const originalFetch = global.fetch;
+  global.fetch = fetchImpl;
+  try {
+    process.env.TECHNOCORE_ROOMS = 'env-room-a,env-room-b';
+    await withTempCwd(
+      () => {},
+      async () => {
+        const outPath = join(mkdtempSync(join(tmpdir(), 'attest-out-')), 'evidence.json');
+        const code = await run(['mine', '--did', did, '--out', outPath], harness().io);
+        assert.equal(code, 0);
+        assert.ok(seenRooms.includes('env-room-a'));
+        assert.ok(seenRooms.includes('env-room-b'));
+      },
+    );
+  } finally {
+    global.fetch = originalFetch;
+    delete process.env.TECHNOCORE_ROOMS;
+  }
+});
+
+test('a missing evidence/ directory falls back to receipts and defaults without error', async () => {
+  isolate();
+  await run(['keygen'], harness(['pw', 'pw']).io);
+  await run(['sign', 'my-custom-room', 'hi'], harness(['pw']).io);
+  const { seenRooms, fetchImpl } = exportSpyFetch();
+  const originalFetch = global.fetch;
+  global.fetch = fetchImpl;
+  try {
+    await withTempCwd(
+      () => {
+        // deliberately do not create an evidence/ directory here
+      },
+      async () => {
+        const outPath = join(mkdtempSync(join(tmpdir(), 'attest-out-')), 'evidence.json');
+        const h = harness();
+        const code = await run(['mine', '--out', outPath], h.io);
+        assert.equal(code, 0);
+        assert.ok(seenRooms.includes('my-custom-room'));
+        assert.ok(seenRooms.includes('technocore'));
+        assert.ok(seenRooms.includes('flop_labs'));
+        assert.ok(seenRooms.includes('technocore-genesis'));
+      },
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('an unparseable evidence file is skipped and the run still succeeds using the other sources', async () => {
+  isolate();
+  const { did } = generateIdentity();
+  const { seenRooms, fetchImpl } = exportSpyFetch();
+  const originalFetch = global.fetch;
+  global.fetch = fetchImpl;
+  try {
+    await withTempCwd(
+      (cwd) => {
+        const evDir = join(cwd, 'evidence');
+        mkdirSync(evDir, { recursive: true });
+        writeFileSync(join(evDir, '2026-09-15.json'), '{not valid json');
+      },
+      async () => {
+        const outPath = join(mkdtempSync(join(tmpdir(), 'attest-out-')), 'evidence.json');
+        const h = harness();
+        const code = await run(['mine', '--did', did, '--out', outPath], h.io);
+        assert.equal(code, 0);
+        assert.ok(seenRooms.includes('technocore'));
+        assert.ok(seenRooms.includes('flop_labs'));
+        assert.ok(seenRooms.includes('technocore-genesis'));
+      },
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('mine --rooms rejects an unsafe room name, names it, and makes no fetch', async () => {
+  isolate();
+  const { did } = generateIdentity();
+  const originalFetch = global.fetch;
+  let fetchCalled = false;
+  global.fetch = (async () => {
+    fetchCalled = true;
+    return new Response('', { status: 200 });
+  }) as unknown as typeof fetch;
+  try {
+    const outPath = join(mkdtempSync(join(tmpdir(), 'attest-out-')), 'evidence.json');
+    const h = harness();
+    const code = await run(
+      ['mine', '--did', did, '--out', outPath, '--rooms', '../etc'],
+      h.io,
+    );
+    assert.notEqual(code, 0);
+    assert.match(h.lines.join('\n'), /\.\.\/etc/);
+    assert.equal(fetchCalled, false);
+    assert.equal(existsSync(outPath), false);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('the mine summary line reports where each room came from', async () => {
+  isolate();
+  const { did } = generateIdentity();
+  const { fetchImpl } = exportSpyFetch();
+  const originalFetch = global.fetch;
+  global.fetch = fetchImpl;
+  try {
+    await withTempCwd(
+      (cwd) => {
+        const evDir = join(cwd, 'evidence');
+        mkdirSync(evDir, { recursive: true });
+        writeFileSync(join(evDir, '2026-09-15.json'), JSON.stringify({ rooms: [{ room: 'extra-room' }] }));
+      },
+      async () => {
+        const outPath = join(mkdtempSync(join(tmpdir(), 'attest-out-')), 'evidence.json');
+        const h = harness();
+        const code = await run(['mine', '--did', did, '--out', outPath], h.io);
+        assert.equal(code, 0);
+        const out = h.lines.join('\n');
+        assert.match(out, /3 default/);
+        assert.match(out, /1 from evidence\/2026-09-15\.json/);
+      },
+    );
   } finally {
     global.fetch = originalFetch;
   }

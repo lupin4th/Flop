@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { exportRoomWithBody, type ExportedMessage } from './client.js';
 import { verifyPayload } from './verify.js';
 
@@ -123,4 +125,46 @@ export function verifySelfEvidence(
     }
   }
   return { checked, valid, invalid };
+}
+
+/**
+ * Reads the room names listed in the newest committed evidence file under
+ * `dir` (files are named `YYYY-MM-DD.json`, so the lexically greatest name
+ * is the newest). This is what lets `mine` discover rooms on a CI runner
+ * that has never seen a receipt: a local run that finds a new room commits
+ * it here, and every later run — local or CI — inherits it back by reading
+ * this file, rather than needing state that only exists on one machine.
+ *
+ * Deliberately tolerant, since this reads state the caller does not
+ * control: a missing directory (the very first run ever) yields no rooms
+ * rather than throwing; a file that fails to parse is skipped in favour of
+ * the next-newest one that does parse; and a parsed file with no `rooms`
+ * array (or non-string `room` fields) yields an empty room list rather than
+ * crashing.
+ */
+export function roomsFromLatestEvidence(dir: string): { rooms: string[]; file?: string } {
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return { rooms: [] };
+  }
+  const files = entries.filter((f) => /^\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort().reverse();
+  for (const file of files) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(join(dir, file), 'utf8'));
+    } catch {
+      continue;
+    }
+    const roomsField =
+      parsed && typeof parsed === 'object' && Array.isArray((parsed as { rooms?: unknown }).rooms)
+        ? (parsed as { rooms: unknown[] }).rooms
+        : [];
+    const rooms = roomsField
+      .map((r) => (r && typeof r === 'object' ? (r as { room?: unknown }).room : undefined))
+      .filter((r): r is string => typeof r === 'string');
+    return { rooms, file };
+  }
+  return { rooms: [] };
 }

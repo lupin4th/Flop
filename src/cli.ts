@@ -16,17 +16,102 @@ import { DEFAULT_BASE, fetchLatestSeq } from './client.js';
 import { assertSafeRoom } from './room.js';
 import { confirmRoom, loadConfirmations, unconfirmedReceipts } from './confirm.js';
 import { runWatch } from './watch.js';
-import { captureSelfEvidence, verifySelfEvidence } from './evidence.js';
+import { captureSelfEvidence, verifySelfEvidence, roomsFromLatestEvidence } from './evidence.js';
 import { decodeDidKey, encodeDidKey } from './didkey.js';
 
 /**
  * Rooms captured by `mine` even if the user has never signed anything there
  * yet — the three rooms this project already cares about (see watch.ts).
- * `cmdMine` adds every room the user actually has a receipt for on top of
- * this, so the command follows the user's real footprint rather than a list
- * that goes stale.
+ * See `resolveMineRooms` for how this combines with `--rooms`,
+ * `TECHNOCORE_ROOMS`, the newest committed evidence file and the local
+ * receipts, so the full room list follows the user's real footprint rather
+ * than a list that goes stale — or, on a runner with no local state at all,
+ * silently shrinks to just these three.
  */
 const DEFAULT_MINE_ROOMS = ['technocore', 'flop_labs', 'technocore-genesis'];
+
+/**
+ * Where `mine` writes its dated capture by default, and — separately from
+ * any `--out` override — where it always looks for the newest previously
+ * committed capture when resolving the room list. These are deliberately
+ * the same directory: it is the one this workflow already checks out and
+ * commits back to on every run.
+ */
+const EVIDENCE_DIR = 'evidence';
+
+/** Splits a comma-separated `--rooms`/`TECHNOCORE_ROOMS` value into room names. */
+function parseRoomsList(raw: string): string[] {
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+/**
+ * Resolves the full room list for `mine` as the union of every source that
+ * can name a room: `--rooms`, `TECHNOCORE_ROOMS`, the newest committed
+ * evidence file (`evidence/*.json`), `loadReceipts()`, and
+ * `DEFAULT_MINE_ROOMS`. Every room from every source is validated with
+ * `assertSafeRoom` before anything else happens — a bad name is rejected by
+ * name, not silently dropped, and this function is called before any
+ * network request so an unsafe name never reaches `captureSelfEvidence`.
+ *
+ * The evidence-file source is what makes this self-sustaining across CI
+ * runs: `evidence/` is the one thing a GitHub Actions runner has that
+ * `~/.technocore-attest/receipts.jsonl` never will, because it is checked
+ * out from the repo rather than living only on the user's machine. A local
+ * run (where receipts exist) discovers a new room and commits its evidence
+ * file; every later CI run then inherits that room by reading the
+ * committed file back, so the room list only grows as the user acts and
+ * never regresses just because a given run happens to have no receipts —
+ * which is why `mine` reads the evidence directory it is about to write
+ * into as one of its own inputs.
+ *
+ * `DEFAULT_MINE_ROOMS` is always counted as its own fixed "default" total
+ * in the returned summary, even when another source also names one of
+ * those rooms — the summary is meant to tell a reader which rooms are the
+ * project's known baseline versus newly discovered, not to give each room
+ * a single owner.
+ */
+function resolveMineRooms(
+  explicitRoomsArg: string | undefined,
+  receiptRooms: string[],
+  evidenceDir: string,
+): { rooms: string[]; summaryParts: string[] } {
+  const claimed = new Set<string>();
+  const summaryParts: string[] = [];
+
+  for (const room of DEFAULT_MINE_ROOMS) assertSafeRoom(room);
+  for (const room of DEFAULT_MINE_ROOMS) claimed.add(room);
+  summaryParts.push(`${DEFAULT_MINE_ROOMS.length} default`);
+
+  const addIncremental = (label: string, rooms: string[]): void => {
+    const fresh: string[] = [];
+    for (const room of rooms) {
+      assertSafeRoom(room);
+      if (!claimed.has(room)) {
+        claimed.add(room);
+        fresh.push(room);
+      }
+    }
+    if (fresh.length > 0) summaryParts.push(`${fresh.length} from ${label}`);
+  };
+
+  if (explicitRoomsArg !== undefined) {
+    addIncremental('--rooms', parseRoomsList(explicitRoomsArg));
+  }
+  const envRooms = process.env.TECHNOCORE_ROOMS;
+  if (envRooms !== undefined) {
+    addIncremental('TECHNOCORE_ROOMS', parseRoomsList(envRooms));
+  }
+  const { rooms: evidenceRooms, file } = roomsFromLatestEvidence(evidenceDir);
+  if (evidenceRooms.length > 0) {
+    addIncremental(`${evidenceDir}/${file}`, evidenceRooms);
+  }
+  addIncremental('receipts', receiptRooms);
+
+  return { rooms: [...claimed], summaryParts };
+}
 
 export type Io = {
   out: (s: string) => void;
@@ -41,7 +126,7 @@ const USAGE = `Usage:
   technocore-attest confirm <room>         watch a room and confirm the server served your unconfirmed messages
   technocore-attest report                 summarise receipts and archives
   technocore-attest watch                  one-shot check of GitHub, flop.finance and chat for a testnet/faucet announcement
-  technocore-attest mine [--did <did>] [--out <path>]
+  technocore-attest mine [--did <did>] [--out <path>] [--rooms <a,b,c>]
                                             capture and commit self-checking evidence of your own presence
 
 This tool never sends a message for you. \`sign\` prints a URL; opening it is your call.
@@ -205,7 +290,12 @@ function resolveMineDid(explicitDid: string | undefined): string | undefined {
  * turn only reads `/export`. Nothing this command touches can post to
  * technocore.
  */
-async function cmdMine(io: Io, outPath?: string, explicitDid?: string): Promise<number> {
+async function cmdMine(
+  io: Io,
+  outPath?: string,
+  explicitDid?: string,
+  explicitRooms?: string,
+): Promise<number> {
   const did = resolveMineDid(explicitDid);
   if (!did) {
     io.out(
@@ -222,11 +312,20 @@ async function cmdMine(io: Io, outPath?: string, explicitDid?: string): Promise<
     io.out(`Malformed DID ${JSON.stringify(did)}: ${err instanceof Error ? err.message : String(err)}`);
     return 1;
   }
-  const receipts = loadReceipts();
-  const rooms = [...new Set([...DEFAULT_MINE_ROOMS, ...receipts.map((r) => r.room)])];
+
+  let rooms: string[];
+  let summaryParts: string[];
+  try {
+    const receipts = loadReceipts();
+    ({ rooms, summaryParts } = resolveMineRooms(explicitRooms, receipts.map((r) => r.room), EVIDENCE_DIR));
+  } catch (err) {
+    io.out(err instanceof Error ? err.message : String(err));
+    return 1;
+  }
+
   const evidence = await captureSelfEvidence(did, rooms, { base: DEFAULT_BASE });
 
-  const path = outPath ?? join('evidence', `${new Date().toISOString().slice(0, 10)}.json`);
+  const path = outPath ?? join(EVIDENCE_DIR, `${new Date().toISOString().slice(0, 10)}.json`);
   const dir = dirname(path);
   if (dir && dir !== '.') mkdirSync(dir, { recursive: true });
   writeFileSync(path, JSON.stringify(evidence, null, 2) + '\n');
@@ -236,7 +335,7 @@ async function cmdMine(io: Io, outPath?: string, explicitDid?: string): Promise<
   const { checked, valid, invalid } = verifySelfEvidence(evidence);
 
   io.out(
-    `${evidence.rooms.length} room(s) captured, ${ownMessages} own message(s) found, ${valid}/${checked} signature(s) valid.`,
+    `${evidence.rooms.length} room(s) captured (${summaryParts.join(', ')}), ${ownMessages} own message(s) found, ${valid}/${checked} signature(s) valid.`,
   );
   if (failedRooms.length > 0) {
     io.out(`Could not reach: ${failedRooms.join(', ')} (recorded, not fatal to the others).`);
@@ -301,7 +400,9 @@ export async function run(argv: string[], io: Io): Promise<number> {
       const out = outIdx !== -1 ? rest[outIdx + 1] : undefined;
       const didIdx = rest.indexOf('--did');
       const did = didIdx !== -1 ? (rest[didIdx + 1] ?? '') : undefined;
-      return cmdMine(io, out, did);
+      const roomsIdx = rest.indexOf('--rooms');
+      const rooms = roomsIdx !== -1 ? (rest[roomsIdx + 1] ?? '') : undefined;
+      return cmdMine(io, out, did, rooms);
     }
     default:
       io.out(USAGE);
