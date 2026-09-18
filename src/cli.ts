@@ -17,6 +17,7 @@ import { assertSafeRoom } from './room.js';
 import { confirmRoom, loadConfirmations, unconfirmedReceipts } from './confirm.js';
 import { runWatch } from './watch.js';
 import { captureSelfEvidence, verifySelfEvidence } from './evidence.js';
+import { decodeDidKey, encodeDidKey } from './didkey.js';
 
 /**
  * Rooms captured by `mine` even if the user has never signed anything there
@@ -40,7 +41,8 @@ const USAGE = `Usage:
   technocore-attest confirm <room>         watch a room and confirm the server served your unconfirmed messages
   technocore-attest report                 summarise receipts and archives
   technocore-attest watch                  one-shot check of GitHub, flop.finance and chat for a testnet/faucet announcement
-  technocore-attest mine [--out <path>]    capture and commit self-checking evidence of your own presence
+  technocore-attest mine [--did <did>] [--out <path>]
+                                            capture and commit self-checking evidence of your own presence
 
 This tool never sends a message for you. \`sign\` prints a URL; opening it is your call.
 Never paste a private key, seed phrase or API key into a public room.`;
@@ -178,15 +180,46 @@ async function cmdWatch(io: Io): Promise<number> {
 }
 
 /**
- * Reads only: gets the DID straight from the key file's plaintext `did`
- * field (see `readStoredDid`), never decrypts the private key, prompts for
- * no passphrase, and signs nothing. `captureSelfEvidence` in turn only
- * reads `/export`. Nothing this command touches can post to technocore.
+ * Resolves the DID `mine` should use, in order:
+ *   1. `--did` on the command line (explicitDid, whatever its value — even
+ *      an empty string counts as "supplied", so it fails validation loudly
+ *      rather than silently falling through to the next source)
+ *   2. the `TECHNOCORE_DID` environment variable, by the same rule
+ *   3. the local keystore (`readStoredDid`), for interactive use
+ * `mine` never needs the passphrase or the private key — only this public
+ * value — which is what lets a CI runner with no key file on it run `mine`
+ * at all.
  */
-async function cmdMine(io: Io, outPath?: string): Promise<number> {
-  const did = readStoredDid();
+function resolveMineDid(explicitDid: string | undefined): string | undefined {
+  if (explicitDid !== undefined) return explicitDid;
+  const envDid = process.env.TECHNOCORE_DID;
+  if (envDid !== undefined) return envDid;
+  return readStoredDid();
+}
+
+/**
+ * Reads only: the DID either comes straight from the key file's plaintext
+ * `did` field (see `readStoredDid`) or is handed to us explicitly via
+ * `--did`/`TECHNOCORE_DID` — either way nothing here decrypts the private
+ * key, prompts for a passphrase, or signs anything. `captureSelfEvidence` in
+ * turn only reads `/export`. Nothing this command touches can post to
+ * technocore.
+ */
+async function cmdMine(io: Io, outPath?: string, explicitDid?: string): Promise<number> {
+  const did = resolveMineDid(explicitDid);
   if (!did) {
-    io.out('No identity found. Run `technocore-attest keygen` first — `mine` only needs the public DID, never the passphrase or the private key.');
+    io.out(
+      'No identity found. Run `technocore-attest keygen` first, or pass the public DID explicitly with `--did <did>` or the TECHNOCORE_DID environment variable — `mine` only needs the public DID, never the passphrase or the private key.',
+    );
+    return 1;
+  }
+  try {
+    const raw = decodeDidKey(did);
+    if (encodeDidKey(raw) !== did) {
+      throw new Error('does not round-trip through its own encoding');
+    }
+  } catch (err) {
+    io.out(`Malformed DID ${JSON.stringify(did)}: ${err instanceof Error ? err.message : String(err)}`);
     return 1;
   }
   const receipts = loadReceipts();
@@ -264,9 +297,11 @@ export async function run(argv: string[], io: Io): Promise<number> {
     case 'watch':
       return cmdWatch(io);
     case 'mine': {
-      const idx = rest.indexOf('--out');
-      const out = idx !== -1 ? rest[idx + 1] : undefined;
-      return cmdMine(io, out);
+      const outIdx = rest.indexOf('--out');
+      const out = outIdx !== -1 ? rest[outIdx + 1] : undefined;
+      const didIdx = rest.indexOf('--did');
+      const did = didIdx !== -1 ? (rest[didIdx + 1] ?? '') : undefined;
+      return cmdMine(io, out, did);
     }
     default:
       io.out(USAGE);

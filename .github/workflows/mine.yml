@@ -15,12 +15,14 @@ name: mine
 #
 # `node dist/cli.js mine` reads only: it fetches `/r/<room>/export` for a
 # handful of public rooms and writes JSON locally. It never touches a
-# private key (see keystore.ts's `readStoredDid`, which reads the plaintext
-# `did` field without decrypting anything) and never signs or posts
-# anything. GITHUB_TOKEN is not passed into our own code at all — the
-# default token GitHub provides to `actions/checkout`/`git push` in this
-# workflow is used only by git itself, under `permissions: contents: write`
-# and nothing broader.
+# private key and never signs or posts anything. This runner has no key
+# file at all, so the DID is passed explicitly with `--did` below (see the
+# "Run mine" step) instead of coming from the local keystore's plaintext
+# `did` field the way an interactive run would (keystore.ts's
+# `readStoredDid`). GITHUB_TOKEN is not passed into our own code at all —
+# the default token GitHub provides to `actions/checkout`/`git push` in
+# this workflow is used only by git itself, under `permissions: contents:
+# write` and nothing broader.
 
 on:
   schedule:
@@ -49,7 +51,11 @@ jobs:
         run: npm run build
 
       - name: Run mine
-        run: node dist/cli.js mine
+        # The DID is a public key, already committed in evidence/ and posted
+        # with signatures in public rooms — there is no secret here. The
+        # private key lives only on the user's machine and is never needed:
+        # `mine` reads public rooms and writes JSON.
+        run: node dist/cli.js mine --did did:key:z6MkjLFhnx9yn29TsmYXfbTTyBK1hduCHajKM5wPevcGp3aw
 
       - name: Commit evidence if it changed
         run: |

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { run } from './cli.js';
 import { receiptsPath } from './paths.js';
-import { readStoredDid, loadIdentity } from './keystore.js';
+import { readStoredDid, loadIdentity, generateIdentity } from './keystore.js';
 import { signPayload } from './verify.js';
 
 function harness(answers: string[] = []) {
@@ -254,13 +254,89 @@ function fakeExportFetchFor(byRoom: Record<string, string>) {
   }) as unknown as typeof fetch;
 }
 
-test('mine refuses to run before an identity exists', async () => {
+test('mine refuses to run before an identity exists, and names --did and TECHNOCORE_DID', async () => {
   isolate();
   const h = harness();
   const code = await run(['mine'], h.io);
   assert.notEqual(code, 0);
-  assert.match(h.lines.join('\n'), /No identity/i);
+  const out = h.lines.join('\n');
+  assert.match(out, /No identity/i);
+  assert.match(out, /--did/);
+  assert.match(out, /TECHNOCORE_DID/);
 });
+
+test('mine --did works with no key file present and produces the evidence file', async () => {
+  isolate();
+  const { did } = generateIdentity();
+  const originalFetch = global.fetch;
+  global.fetch = fakeExportFetchFor({});
+  try {
+    assert.equal(readStoredDid(), undefined);
+    const outPath = join(mkdtempSync(join(tmpdir(), 'attest-out-')), 'evidence.json');
+    const h = harness();
+    const code = await run(['mine', '--did', did, '--out', outPath], h.io);
+    assert.equal(code, 0);
+    assert.equal(existsSync(outPath), true);
+    const written = JSON.parse(readFileSync(outPath, 'utf8'));
+    assert.equal(written.did, did);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('TECHNOCORE_DID is used when --did is absent; --did wins when both are set', async () => {
+  isolate();
+  const { did: envDid } = generateIdentity();
+  const { did: flagDid } = generateIdentity();
+  const originalFetch = global.fetch;
+  global.fetch = fakeExportFetchFor({});
+  try {
+    process.env.TECHNOCORE_DID = envDid;
+    const outPath1 = join(mkdtempSync(join(tmpdir(), 'attest-out-')), 'evidence.json');
+    const code1 = await run(['mine', '--out', outPath1], harness().io);
+    assert.equal(code1, 0);
+    assert.equal(JSON.parse(readFileSync(outPath1, 'utf8')).did, envDid);
+
+    const outPath2 = join(mkdtempSync(join(tmpdir(), 'attest-out-')), 'evidence.json');
+    const code2 = await run(['mine', '--did', flagDid, '--out', outPath2], harness().io);
+    assert.equal(code2, 0);
+    assert.equal(JSON.parse(readFileSync(outPath2, 'utf8')).did, flagDid);
+  } finally {
+    global.fetch = originalFetch;
+    delete process.env.TECHNOCORE_DID;
+  }
+});
+
+test('mine falls back to the local keystore when neither --did nor TECHNOCORE_DID is supplied', async () => {
+  isolate();
+  await run(['keygen'], harness(['pw', 'pw']).io);
+  const did = readStoredDid()!;
+  const originalFetch = global.fetch;
+  global.fetch = fakeExportFetchFor({});
+  try {
+    delete process.env.TECHNOCORE_DID;
+    const outPath = join(mkdtempSync(join(tmpdir(), 'attest-out-')), 'evidence.json');
+    const code = await run(['mine', '--out', outPath], harness().io);
+    assert.equal(code, 0);
+    assert.equal(JSON.parse(readFileSync(outPath, 'utf8')).did, did);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+for (const bad of ['did:key:zNOTVALID', 'not-a-did', '']) {
+  test(`mine --did rejects a malformed DID (${JSON.stringify(bad)}) without writing a file`, async () => {
+    isolate();
+    const outDir = mkdtempSync(join(tmpdir(), 'attest-out-'));
+    const outPath = join(outDir, 'evidence.json');
+    const h = harness();
+    const code = await run(['mine', '--did', bad, '--out', outPath], h.io);
+    assert.notEqual(code, 0);
+    assert.equal(existsSync(outPath), false);
+    const out = h.lines.join('\n');
+    assert.match(out, /did|DID/);
+  });
+}
 
 test('mine writes the evidence file and exits 0 when every stored signature verifies', async () => {
   isolate();
