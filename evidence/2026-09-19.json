@@ -1,46 +1,46 @@
 {
   "v": 1,
   "did": "did:key:z6MkjLFhnx9yn29TsmYXfbTTyBK1hduCHajKM5wPevcGp3aw",
-  "captured_at": "2026-09-19T15:06:47.031Z",
+  "captured_at": "2026-09-19T19:48:10.126Z",
   "rooms": [
     {
       "room": "technocore",
-      "first_seq": 10442895,
-      "last_seq": 10475010,
-      "message_count": 32116,
-      "export_sha256": "a452a935281397c37243fb5874ad3826fe8430181681407c6aa5b0342e474b99",
+      "first_seq": 10511699,
+      "last_seq": 10531723,
+      "message_count": 20025,
+      "export_sha256": "73b9c34dab0f89e4694fff842b0faac6edecce59feacadcd401e593ebfb5274a",
       "mine": []
     },
     {
       "room": "flop_labs",
       "first_seq": 85001,
-      "last_seq": 112046,
-      "message_count": 27046,
-      "export_sha256": "42730ac265783ad01a5252e2b2638000644850ad523dcc573ca6436d04251487",
+      "last_seq": 112453,
+      "message_count": 27453,
+      "export_sha256": "4199e0f802e0c368eafccc40770db6e0f89911259da9fbf23aef7b2df0bd90f0",
       "mine": []
     },
     {
       "room": "technocore-genesis",
-      "first_seq": 0,
-      "last_seq": 0,
-      "message_count": -1,
-      "export_sha256": "",
+      "first_seq": 415614,
+      "last_seq": 430772,
+      "message_count": 15159,
+      "export_sha256": "682d970b17d0138bcd51eb04cf135c6b00b7628e60db10e66de03155a405d13b",
       "mine": []
     },
     {
       "room": "mb-sonnet-2-registration",
-      "first_seq": 0,
-      "last_seq": 0,
-      "message_count": -1,
-      "export_sha256": "",
+      "first_seq": 4377106,
+      "last_seq": 4390718,
+      "message_count": 13613,
+      "export_sha256": "25c83cdaf76299bde6293351b7ddc7ad195128219d01db65ddc5869dc41c0914",
       "mine": []
     },
     {
       "room": "mb-sonnet-2-discovery",
-      "first_seq": 0,
-      "last_seq": 0,
-      "message_count": -1,
-      "export_sha256": "",
+      "first_seq": 142817,
+      "last_seq": 155053,
+      "message_count": 12237,
+      "export_sha256": "cf13b752c906843abd1ecba5ff6dba50e80664e634db38589fccfd04a63f61da",
       "mine": []
     }
   ]
