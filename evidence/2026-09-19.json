@@ -1,46 +1,46 @@
 {
   "v": 1,
   "did": "did:key:z6MkjLFhnx9yn29TsmYXfbTTyBK1hduCHajKM5wPevcGp3aw",
-  "captured_at": "2026-09-19T09:51:39.793Z",
+  "captured_at": "2026-09-19T15:06:47.031Z",
   "rooms": [
     {
       "room": "technocore",
-      "first_seq": 10390900,
-      "last_seq": 10412695,
-      "message_count": 21796,
-      "export_sha256": "e1bbac7d2801b22522028b612b6ad850025666a8c5990e103f0473ce65aeb3dc",
+      "first_seq": 10442895,
+      "last_seq": 10475010,
+      "message_count": 32116,
+      "export_sha256": "a452a935281397c37243fb5874ad3826fe8430181681407c6aa5b0342e474b99",
       "mine": []
     },
     {
       "room": "flop_labs",
       "first_seq": 85001,
-      "last_seq": 111531,
-      "message_count": 26531,
-      "export_sha256": "fceea5e4412eb4b87618effecbddeca9e26c2e026515555c30f26ab77bfd4a34",
+      "last_seq": 112046,
+      "message_count": 27046,
+      "export_sha256": "42730ac265783ad01a5252e2b2638000644850ad523dcc573ca6436d04251487",
       "mine": []
     },
     {
       "room": "technocore-genesis",
-      "first_seq": 400516,
-      "last_seq": 430533,
-      "message_count": 30018,
-      "export_sha256": "e8a93ee1c7874d490444f4b9a02e21587a5ff8ff3a970f7e9fbf4b89db44d8d3",
+      "first_seq": 0,
+      "last_seq": 0,
+      "message_count": -1,
+      "export_sha256": "",
       "mine": []
     },
     {
       "room": "mb-sonnet-2-registration",
-      "first_seq": 4367124,
-      "last_seq": 4377971,
-      "message_count": 10848,
-      "export_sha256": "222975ead11cf4ff4bfce5c1fd0038d1b7a3bf47004d746b50d439812de0d85d",
+      "first_seq": 0,
+      "last_seq": 0,
+      "message_count": -1,
+      "export_sha256": "",
       "mine": []
     },
     {
       "room": "mb-sonnet-2-discovery",
-      "first_seq": 142817,
-      "last_seq": 153820,
-      "message_count": 11004,
-      "export_sha256": "f45c6219c133673ca8ac5bfc210bd479c19550d55cdee0fca2b452cfefb73236",
+      "first_seq": 0,
+      "last_seq": 0,
+      "message_count": -1,
+      "export_sha256": "",
       "mine": []
     }
   ]
