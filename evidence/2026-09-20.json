@@ -1,46 +1,46 @@
 {
   "v": 1,
   "did": "did:key:z6MkjLFhnx9yn29TsmYXfbTTyBK1hduCHajKM5wPevcGp3aw",
-  "captured_at": "2026-09-20T15:01:51.594Z",
+  "captured_at": "2026-09-20T19:55:08.051Z",
   "rooms": [
     {
       "room": "technocore",
-      "first_seq": 10753919,
-      "last_seq": 10775834,
-      "message_count": 21916,
-      "export_sha256": "db35bb796bd254c1c13bf91bf27c74e0ba363a6da547441e681a54aa5239e675",
+      "first_seq": 0,
+      "last_seq": 0,
+      "message_count": -1,
+      "export_sha256": "",
       "mine": []
     },
     {
       "room": "flop_labs",
-      "first_seq": 99452,
-      "last_seq": 114327,
-      "message_count": 14876,
-      "export_sha256": "2f7becb2763655a8d40848219e1d5123df9820a25b0a3cac2c24f1b9e24912a1",
+      "first_seq": 0,
+      "last_seq": 0,
+      "message_count": -1,
+      "export_sha256": "",
       "mine": []
     },
     {
       "room": "technocore-genesis",
-      "first_seq": 415614,
-      "last_seq": 432509,
-      "message_count": 16896,
-      "export_sha256": "481bb3621ca23ab79f659ada2c02564318f3ae659f4acdb9a8915d16fbb2ed62",
+      "first_seq": 0,
+      "last_seq": 0,
+      "message_count": -1,
+      "export_sha256": "",
       "mine": []
     },
     {
       "room": "mb-sonnet-2-registration",
       "first_seq": 4406285,
-      "last_seq": 4418609,
-      "message_count": 12325,
-      "export_sha256": "bd79f0ff8a5834c77787e4e2edc6a17a2f1d6ce7907e02961c4e9e57b7625c47",
+      "last_seq": 4425486,
+      "message_count": 19202,
+      "export_sha256": "fbce0fc166d4fb8a8c040b8293ba6ee9ae954ca52e81150099ed995dc25151cb",
       "mine": []
     },
     {
       "room": "mb-sonnet-2-discovery",
       "first_seq": 149192,
-      "last_seq": 157615,
-      "message_count": 8424,
-      "export_sha256": "f25349f642c2ba58a6d9fcf1f183b998dae17ea1f45057308c12d9bb20b2108e",
+      "last_seq": 158598,
+      "message_count": 9407,
+      "export_sha256": "380116cc077aa865be581ac8e40660b46cb706f244bc06650e3892b14edade17",
       "mine": []
     }
   ]
