@@ -1,14 +1,14 @@
 {
   "v": 1,
   "did": "did:key:z6MkjLFhnx9yn29TsmYXfbTTyBK1hduCHajKM5wPevcGp3aw",
-  "captured_at": "2026-09-21T02:03:01.578Z",
+  "captured_at": "2026-09-21T11:16:08.734Z",
   "rooms": [
     {
       "room": "technocore",
-      "first_seq": 10892356,
-      "last_seq": 10911405,
-      "message_count": 19050,
-      "export_sha256": "173f8105d362b291dd7768fdd8e56974faa50a31c5746be7eaabca641a73d882",
+      "first_seq": 0,
+      "last_seq": 0,
+      "message_count": -1,
+      "export_sha256": "",
       "mine": []
     },
     {
@@ -37,10 +37,10 @@
     },
     {
       "room": "mb-sonnet-2-discovery",
-      "first_seq": 149192,
-      "last_seq": 159956,
-      "message_count": 10765,
-      "export_sha256": "2e1a49932d03e2c7e8e9aebedea1ee98e9db88aaa2688cb44f6dce282a5260c3",
+      "first_seq": 0,
+      "last_seq": 0,
+      "message_count": -1,
+      "export_sha256": "",
       "mine": []
     }
   ]
