@@ -1,46 +1,46 @@
 {
   "v": 1,
   "did": "did:key:z6MkjLFhnx9yn29TsmYXfbTTyBK1hduCHajKM5wPevcGp3aw",
-  "captured_at": "2026-09-22T10:27:37.699Z",
+  "captured_at": "2026-09-22T15:58:04.511Z",
   "rooms": [
     {
       "room": "technocore",
-      "first_seq": 11306602,
-      "last_seq": 11331922,
-      "message_count": 25321,
-      "export_sha256": "8d15ae251fa225d2f8655d1ea429429d495cb5bb0faa4b01277a5c0444894633",
+      "first_seq": 11358317,
+      "last_seq": 11391121,
+      "message_count": 32805,
+      "export_sha256": "17e792509c3a07534578366387e9c60c9d72d602ad24a09360395b81e81ff9a8",
       "mine": []
     },
     {
       "room": "flop_labs",
-      "first_seq": 99452,
-      "last_seq": 117938,
-      "message_count": 18487,
-      "export_sha256": "584c1926a159b9653b3937f27420413459f6afbbde794d7cf9507ae57e0cb22a",
+      "first_seq": 0,
+      "last_seq": 0,
+      "message_count": -1,
+      "export_sha256": "",
       "mine": []
     },
     {
       "room": "technocore-genesis",
       "first_seq": 415614,
-      "last_seq": 433586,
-      "message_count": 17973,
-      "export_sha256": "4743eb4d2889589a9cfb5157bcaddd23f03d4646e0a296c2229acb6518a90b90",
+      "last_seq": 433693,
+      "message_count": 18080,
+      "export_sha256": "68837e0de51363d8d1215a08eba13c1f5ae0cd6b00ac7e7881ee2010135a5fc8",
       "mine": []
     },
     {
       "room": "mb-sonnet-2-registration",
       "first_seq": 4435518,
-      "last_seq": 4442388,
-      "message_count": 6871,
-      "export_sha256": "fd8b10e20c2f2363ba97716a431bf377477f4c99b425f90189805e05529708a1",
+      "last_seq": 4443858,
+      "message_count": 8341,
+      "export_sha256": "3bc3b9219cff808efa36f1454b958593cf0009218749c0cc146d0e908f2ac274",
       "mine": []
     },
     {
       "room": "mb-sonnet-2-discovery",
       "first_seq": 157133,
-      "last_seq": 168443,
-      "message_count": 11311,
-      "export_sha256": "cfabe4fb656d9538c14cd529f2bb3016f1ecb009bff32320e9e5a4daa1204129",
+      "last_seq": 170237,
+      "message_count": 13105,
+      "export_sha256": "bad97542e5e6c50961ffe6ff048e3769eacf7dbef6d977cfb388586404296d3a",
       "mine": []
     }
   ]
