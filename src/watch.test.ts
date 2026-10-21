@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import {
   extractText,
+  extractBlocks,
   textHash,
   loadWatchState,
   saveWatchState,
@@ -656,7 +658,8 @@ test('a changed page reports the removed and added sentences with - and +', asyn
   assert.match(f.summary, /^\+ The unlock schedule is not set\.$/m);
   assert.ok(!f.summary.includes('Join us'), 'unchanged sentences are not listed');
   assert.ok(f.summary.startsWith(`Page content changed: ${TEASER}`));
-  assert.equal(state.page_text[TEASER], 'Welcome to FLOP. The unlock schedule is not set. Join us.');
+  // Stored text is the newline-joined blocks (see extractBlocks).
+  assert.equal(state.page_text[TEASER], 'Welcome to FLOP.\nThe unlock schedule is not set.\nJoin us.');
 });
 
 test('checkPages stores page text on the first run', async () => {
@@ -728,4 +731,84 @@ test('loadWatchState accepts a legacy state file with no page_text and supplies 
   const loaded = loadWatchState();
   assert.deepEqual(loaded.page_text, {});
   assert.equal(loaded.pages['https://flop.finance/'], 'h');
+});
+
+// --- block-structured diffs ---------------------------------------------------
+
+test('extractBlocks splits lists and sentences into separate items, not one run-on string', () => {
+  const blocks = extractBlocks('<ul><li>Miners</li><li>Validators</li></ul><p>One. Two.</p>');
+  assert.deepEqual(blocks, ['Miners', 'Validators', 'One.', 'Two.']);
+});
+
+test('extractBlocks drops script and style contents, splits on br and table cells, and drops empties', () => {
+  const html =
+    '<style>.a{color:red}</style><script>var x = "a. b";</script>' +
+    '<h2>Title</h2><table><tr><td>Cell  one</td><th>Cell two</th></tr></table>line a<br/>line b<BR>  <div>  </div>';
+  assert.deepEqual(extractBlocks(html), ['Title', 'Cell one', 'Cell two', 'line a', 'line b']);
+});
+
+test('stored page hashes are unchanged: still the hash of extractText, not of the blocks', async () => {
+  isolate();
+  const html = '<html><body><ul><li>Miners</li><li>Validators</li></ul><p>One. Two.</p></body></html>';
+  // Pinned literal: sha256 of the extractText output as it was before extractBlocks
+  // existed. Hashes already cached by the workflow were produced this way.
+  const expected = '681382bc4be9793bd4023214c115b936c5c9159c43698ab12b1d31465aa4ebce';
+  assert.equal(extractText(html), 'MinersValidatorsOne. Two.');
+  assert.equal(textHash(html), expected);
+  const state = freshState();
+  const fetchImpl = (async () => new Response(html)) as unknown as typeof fetch;
+  await checkPages(state, { fetchImpl });
+  for (const u of PAGE_URLS) assert.equal(state.pages[u], expected);
+  assert.equal(state.page_text[PAGE_URLS[0]], 'Miners\nValidators\nOne.\nTwo.');
+});
+
+/** A ~800 char list item whose one differing word sits near character 500. */
+function longBlock(word: string): string {
+  const filler = (n: number, tag: string) => Array.from({ length: n }, (_, i) => `${tag}${i}`).join(' ');
+  return `${filler(70, 'lead')} ${word} ${filler(45, 'tail')}`;
+}
+
+test('a one-word change deep inside a long block is visible on both the - and + lines', async () => {
+  isolate();
+  const oldBlock = longBlock('ALPHA');
+  const newBlock = longBlock('OMEGA');
+  assert.ok(oldBlock.length > 750 && oldBlock.indexOf('ALPHA') > 400, `fixture: len ${oldBlock.length} at ${oldBlock.indexOf('ALPHA')}`);
+  const state = freshState();
+  await checkPages(state, { fetchImpl: pageFetch({ [TEASER]: `<ul><li>Intro</li><li>${oldBlock}</li></ul>` }) });
+  const findings = await checkPages(state, { fetchImpl: pageFetch({ [TEASER]: `<ul><li>Intro</li><li>${newBlock}</li></ul>` }) });
+  assert.equal(findings.length, 1);
+  const lines = findings[0].summary.split('\n');
+  const minus = lines.find((l) => l.startsWith('- '));
+  const plus = lines.find((l) => l.startsWith('+ '));
+  assert.ok(minus !== undefined && plus !== undefined);
+  assert.ok(minus.includes('ALPHA') && !minus.includes('OMEGA'), minus);
+  assert.ok(plus.includes('OMEGA') && !plus.includes('ALPHA'), plus);
+  assert.ok(minus.length <= 202 && plus.length <= 202, 'each line stays within about 200 characters');
+});
+
+test('a paired window that does not start at character 0 is marked with an ellipsis at the front, and at the back when cut', () => {
+  const out = diffSentences(longBlock('ALPHA'), longBlock('OMEGA'));
+  const minus = out.split('\n').find((l) => l.startsWith('- '))!;
+  const plus = out.split('\n').find((l) => l.startsWith('+ '))!;
+  assert.ok(minus.startsWith('- …'), minus);
+  assert.ok(plus.startsWith('+ …'), plus);
+  assert.ok(minus.endsWith('…') && plus.endsWith('…'));
+  assert.ok(!minus.startsWith('- lead0'), 'window does not begin at the start of the block');
+});
+
+test('a window is not marked with a front ellipsis when the change is near the start', () => {
+  const a = 'Start ALPHA ' + 'x '.repeat(200);
+  const b = 'Start OMEGA ' + 'x '.repeat(200);
+  const out = diffSentences(a, b);
+  const minus = out.split('\n').find((l) => l.startsWith('- '))!;
+  assert.ok(minus.startsWith('- Start ALPHA'), minus);
+  assert.ok(minus.endsWith('…'));
+});
+
+test('unpaired lines keep start-truncation', () => {
+  const out = diffSentences('Keep. ' + 'Q'.repeat(500) + '.', 'Keep.');
+  const minus = out.split('\n').find((l) => l.startsWith('- '))!;
+  assert.ok(minus.startsWith('- QQQ'));
+  assert.ok(minus.endsWith('…'));
+  assert.ok(minus.length <= 202);
 });

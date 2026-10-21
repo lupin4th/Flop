@@ -110,6 +110,12 @@ const MAX_CHAT_FINDINGS_PER_ROOM = 5;
  * which is the only reason hashing page content is viable at all here.
  */
 export function extractText(html: string): string {
+  // DO NOT CHANGE THIS FUNCTION (or `textHash`). The hashes in `state.pages`
+  // already cached by the workflow were produced by exactly this text; any
+  // change here makes all four pages read as "changed" on the first run
+  // after deploy and opens a false issue, the very noise this tool was fixed
+  // to stop. Anything that needs finer structure (see `extractBlocks`)
+  // is a separate function that only EXPLAINS a change the hash detected.
   return html
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
     .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '')
@@ -120,6 +126,38 @@ export function extractText(html: string): string {
 
 export function textHash(html: string): string {
   return createHash('sha256').update(extractText(html)).digest('hex');
+}
+
+const BLOCK_TAGS =
+  'p|div|li|h1|h2|h3|h4|h5|h6|tr|td|th|br|section|article|header|footer|blockquote|pre|ul|ol|table|dt|dd';
+const BLOCK_BOUNDARY = new RegExp(`</?(?:${BLOCK_TAGS})\\b[^>]*>`, 'gi');
+
+/** Splits already tag-free text on newlines, then on sentence punctuation; trims and drops empties. */
+function splitBlocks(text: string): string[] {
+  const out: string[] = [];
+  for (const line of text.split('\n')) {
+    for (const piece of line.replace(/[ \t\f\v\r]+/g, ' ').split(/(?<=[.!?])\s+/)) {
+      const t = piece.trim();
+      if (t !== '') out.push(t);
+    }
+  }
+  return out;
+}
+
+/**
+ * Like `extractText`, but keeps document structure: block-level boundaries
+ * become line breaks, so list items, table cells and headings (which rarely
+ * end in a full stop) are separate items instead of one run-on string. Each
+ * line is then split further on sentence punctuation. Used only to explain a
+ * change; it plays no part in the change test, which stays on `textHash`.
+ */
+export function extractBlocks(html: string): string[] {
+  const text = html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(BLOCK_BOUNDARY, '\n')
+    .replace(/<[^>]+>/g, '');
+  return splitBlocks(text);
 }
 
 function emptyState(): WatchState {
@@ -379,36 +417,87 @@ const MAX_DIFF_SENTENCES = 8;
 /** Each listed sentence is cut to about this many characters. */
 const MAX_DIFF_SENTENCE_LEN = 200;
 
+/** Stored page text is `extractBlocks(...).join('\n')`; callers may also pass plain prose. */
 function sentences(text: string): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const raw of text.split(/(?<=[.!?])\s+/)) {
-    const s = raw.replace(/\s+/g, ' ').trim();
-    if (s === '' || seen.has(s)) continue;
-    seen.add(s);
-    out.push(s);
-  }
-  return out;
+  return [...new Set(splitBlocks(text))];
 }
 
-function clip(s: string): string {
-  // A page controls this text, and the result lands in a Markdown issue body
-  // inside a code fence: a literal fence in a sentence must not close it.
-  const safe = s.replace(/```/g, "'''");
-  return safe.length > MAX_DIFF_SENTENCE_LEN ? safe.slice(0, MAX_DIFF_SENTENCE_LEN - 1) + '…' : safe;
+/** Characters of context kept before the first difference in a long line. */
+const DIFF_LEAD_CONTEXT = 60;
+
+/** Length of the common prefix of two strings. */
+function commonPrefix(a: string, b: string): number {
+  const n = Math.min(a.length, b.length);
+  let i = 0;
+  while (i < n && a[i] === b[i]) i++;
+  return i;
 }
 
 /**
- * A deliberately dumb sentence-level diff: split both texts into
- * whitespace-normalised sentences and take the set difference each way.
- * Order changes are invisible by design — it answers "what was said before
- * that is no longer said, and what is said now that was not", which is the
- * question a reader of an alert has.
+ * Shortens `s` to about `MAX_DIFF_SENTENCE_LEN` characters. With `at` (the
+ * index of the first difference from its paired line) the window starts
+ * about `DIFF_LEAD_CONTEXT` characters before it, so a one-word edit deep in
+ * a long block stays visible; without it, the start of the line is kept.
+ * An ellipsis marks each cut end.
+ *
+ * A page controls this text and the result lands in a Markdown issue body
+ * inside a code fence, so a literal fence in a sentence must not close it
+ * (`'''` has the same length, so indices are unaffected).
+ */
+function clip(raw: string, at?: number): string {
+  const s = raw.replace(/```/g, "'''");
+  if (s.length <= MAX_DIFF_SENTENCE_LEN) return s;
+  const start = at === undefined ? 0 : Math.max(0, at - DIFF_LEAD_CONTEXT);
+  const room = MAX_DIFF_SENTENCE_LEN - (start > 0 ? 1 : 0);
+  const cutAtEnd = start + room < s.length;
+  const body = s.slice(start, start + room - (cutAtEnd ? 1 : 0));
+  return (start > 0 ? '…' : '') + body + (cutAtEnd ? '…' : '');
+}
+
+/**
+ * Pairs each removed line with the unused added line sharing its longest
+ * common prefix (when that prefix is non-empty) and returns, per line on
+ * either side, the index of the first differing character. Unpaired lines
+ * are absent from the maps.
+ */
+function pairDifferences(removed: string[], added: string[]): { removedAt: Map<string, number>; addedAt: Map<string, number> } {
+  const removedAt = new Map<string, number>();
+  const addedAt = new Map<string, number>();
+  const used = new Set<number>();
+  for (const r of removed) {
+    let best = -1;
+    let bestLen = 0;
+    for (let j = 0; j < added.length; j++) {
+      if (used.has(j)) continue;
+      const len = commonPrefix(r, added[j]);
+      if (len > bestLen) {
+        bestLen = len;
+        best = j;
+      }
+    }
+    if (best === -1) continue;
+    used.add(best);
+    removedAt.set(r, bestLen);
+    addedAt.set(added[best], bestLen);
+  }
+  return { removedAt, addedAt };
+}
+
+/**
+ * A deliberately dumb line-level diff: split both texts into
+ * whitespace-normalised blocks (see `extractBlocks`; stored page text is
+ * newline-joined blocks) and take the set difference each way. Order changes
+ * are invisible by design — it answers "what was said before that is no
+ * longer said, and what is said now that was not", which is the question a
+ * reader of an alert has.
  *
  * Output is a fenced `diff` block, `-` for removed and `+` for added. The
  * budget is shared (`MAX_DIFF_SENTENCES` in total), split evenly unless one
  * side is short and leaves room for the other, so a page rewrite shows both
  * what went and what came. Anything beyond the budget is only counted.
+ * A removed line and an added line that share a prefix are treated as an
+ * edit of one another, and long ones are windowed around where they first
+ * differ rather than cut at their start.
  */
 export function diffSentences(oldText: string, newText: string): string {
   const before = sentences(oldText);
@@ -417,6 +506,7 @@ export function diffSentences(oldText: string, newText: string): string {
   const afterSet = new Set(after);
   const removed = before.filter((x) => !afterSet.has(x));
   const added = after.filter((x) => !beforeSet.has(x));
+  const { removedAt, addedAt } = pairDifferences(removed, added);
 
   const half = MAX_DIFF_SENTENCES / 2;
   const removedShown = Math.min(removed.length, Math.max(half, MAX_DIFF_SENTENCES - added.length));
@@ -424,8 +514,8 @@ export function diffSentences(oldText: string, newText: string): string {
   const omitted = removed.length + added.length - removedShown - addedShown;
 
   const lines = ['```diff'];
-  for (const x of removed.slice(0, removedShown)) lines.push(`- ${clip(x)}`);
-  for (const x of added.slice(0, addedShown)) lines.push(`+ ${clip(x)}`);
+  for (const x of removed.slice(0, removedShown)) lines.push(`- ${clip(x, removedAt.get(x))}`);
+  for (const x of added.slice(0, addedShown)) lines.push(`+ ${clip(x, addedAt.get(x))}`);
   if (removed.length + added.length === 0) {
     lines.push('(no sentence was added or removed; only wording order or non-text content changed)');
   }
@@ -461,8 +551,10 @@ export async function checkPages(state: WatchState, opts: WatchOpts = {}): Promi
     const res = await doFetch(url);
     if (!res.ok) throw new Error(`GET ${url} failed: ${res.status}`);
     const html = await res.text();
-    const text = extractText(html);
-    const hash = createHash('sha256').update(text).digest('hex');
+    // The hash is still of `extractText` (see the warning there); the
+    // block-structured text is stored only to explain a change.
+    const hash = textHash(html);
+    const text = extractBlocks(html).join('\n');
     const prior = state.pages[url];
     if (prior !== undefined && prior !== hash) {
       const priorText = state.page_text[url];
