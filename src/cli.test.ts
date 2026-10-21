@@ -637,7 +637,7 @@ test('the mine summary line reports where each room came from', async () => {
   }
 });
 
-test('watch labels chat matches as unverified chatter, once a room has a baseline', async () => {
+test('watch prints chat matches as unverified chatter but exits 0, once a room has a baseline', async () => {
   isolate();
   const originalFetch = global.fetch;
   try {
@@ -654,10 +654,70 @@ test('watch labels chat matches as unverified chatter, once a room has a baselin
     // has a baseline, so it is reported as unverified chat chatter.
     const h = harness();
     const code = await run(['watch'], h.io);
-    assert.equal(code, 10);
+    // Chat-only findings are printed in full for the CI log but must not
+    // open an issue: exit 0, not 10 (see cmdWatch).
+    assert.equal(code, 0);
     const out = h.lines.join('\n');
     assert.match(out, /unverified/i);
+    assert.ok(!h.lines.some((l) => l.startsWith('HEADLINE:')));
     assert.match(out, /faucet is live/);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+async function newRepoRun(roomMessages: unknown[] | undefined) {
+  const known = { name: 'tclk', pushed_at: '2026-01-01T00:00:00Z', description: 'core', html_url: 'https://github.com/flop-labs/tclk' };
+  const fresh = {
+    name: 'technocore-close-call-challenge',
+    pushed_at: '2026-05-01T00:00:00Z',
+    description: 'contest',
+    html_url: 'https://github.com/flop-labs/technocore-close-call-challenge',
+  };
+  global.fetch = fakeFetchFor({ github: [known], roomMessages: roomMessages ? [] : undefined });
+  assert.equal(await run(['watch'], harness().io), 0);
+  global.fetch = fakeFetchFor({ github: [known, fresh], roomMessages });
+  const h = harness();
+  const code = await run(['watch'], h.io);
+  return { code, lines: h.lines };
+}
+
+test('watch exits 10 and leads with a HEADLINE line when an official finding exists', async () => {
+  isolate();
+  const originalFetch = global.fetch;
+  try {
+    const { code, lines } = await newRepoRun(undefined);
+    assert.equal(code, 10);
+    assert.equal(lines[0], 'HEADLINE: NEW REPO technocore-close-call-challenge');
+    assert.equal(lines.filter((l) => l.startsWith('HEADLINE:')).length, 1);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('watch exits 10 when official and chat findings are both present, and prints both', async () => {
+  isolate();
+  const originalFetch = global.fetch;
+  try {
+    const { code, lines } = await newRepoRun([{ seq: 1, ts: 't', from: '~a', text: 'faucet is live!' }]);
+    assert.equal(code, 10);
+    assert.match(lines[0], /^HEADLINE: NEW REPO technocore-close-call-challenge$/);
+    const out = lines.join('\n');
+    assert.match(out, /unverified/i);
+    assert.match(out, /faucet is live/);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('watch prints no HEADLINE line when nothing changed', async () => {
+  isolate();
+  const originalFetch = global.fetch;
+  global.fetch = fakeFetchFor();
+  try {
+    const h = harness();
+    await run(['watch'], h.io);
+    assert.ok(!h.lines.some((l) => l.startsWith('HEADLINE:')));
   } finally {
     global.fetch = originalFetch;
   }

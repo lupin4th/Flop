@@ -16,6 +16,20 @@ import { fetchRoom, type RoomMessage } from './client.js';
 export type Finding = {
   source: 'github' | 'web' | 'chat';
   trust: 'official' | 'unverified';
+  /**
+   * What sort of finding this is, stored explicitly so nothing downstream
+   * (`headline`, the workflow's issue title) ever has to parse `summary`.
+   * Optional so a finding built without it still type-checks; `headline`
+   * ranks a kind-less official finding below every known kind.
+   */
+  kind?: 'new_repo' | 'page_change' | 'repo_push' | 'chat';
+  /**
+   * A short, single-line phrase naming this finding for an issue title,
+   * e.g. `NEW REPO foo`, `flop.finance changed: /teaser/`,
+   * `tclk pushed: wire up settlement rail`. Set on official findings;
+   * `headline` falls back to `summary` when absent.
+   */
+  title?: string;
   summary: string;
   detail: string;
   at: string;
@@ -25,6 +39,14 @@ export type WatchState = {
   v: 1;
   repos: Record<string, string>;
   pages: Record<string, string>;
+  /**
+   * Extracted text (see `extractText`) of each page as of the last run. The
+   * hash in `pages` stays the cheap change test; this exists only so a later
+   * run can say WHAT changed. Absent from state files cached before this
+   * field existed: `loadWatchState` supplies `{}`, and `checkPages` treats a
+   * page with a hash but no text as "previous text not retained".
+   */
+  page_text: Record<string, string>;
   rooms: Record<string, number>;
   last_run: string;
   /**
@@ -101,7 +123,7 @@ export function textHash(html: string): string {
 }
 
 function emptyState(): WatchState {
-  return { v: 1, repos: {}, pages: {}, rooms: {}, last_run: new Date(0).toISOString() };
+  return { v: 1, repos: {}, pages: {}, page_text: {}, rooms: {}, last_run: new Date(0).toISOString() };
 }
 
 function isRecordOf<T>(value: unknown, check: (v: unknown) => v is T): value is Record<string, T> {
@@ -125,6 +147,9 @@ function isWatchState(value: unknown): value is WatchState {
     typeof s.last_run === 'string' &&
     isRecordOf(s.repos, isString) &&
     isRecordOf(s.pages, isString) &&
+    // `page_text` postdates every state file already cached by the workflow,
+    // so a missing key must load cleanly (`loadWatchState` fills it in).
+    (s.page_text === undefined || isRecordOf(s.page_text, isString)) &&
     isRecordOf(s.rooms, isNumber) &&
     // `repo_commits` postdates every state file already on disk, so a
     // state written before this field existed simply lacks the key —
@@ -144,7 +169,7 @@ export function loadWatchState(): WatchState {
   if (!existsSync(path)) return emptyState();
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8'));
-    if (isWatchState(parsed)) return parsed;
+    if (isWatchState(parsed)) return { ...parsed, page_text: parsed.page_text ?? {} };
   } catch {
     // fall through to a fresh baseline
   }
@@ -244,6 +269,11 @@ async function fetchNewCommitSubjects(
   }
 }
 
+/** `subject` is the newest new commit's subject (`fetchNewCommitSubjects` returns newest first). */
+function pushTitle(repoName: string, subject: string | undefined): string {
+  return subject ? `${repoName} pushed: ${subject}` : `${repoName} pushed`;
+}
+
 function formatPushFinding(repoName: string, subjects: string[]): string {
   if (subjects.length === 0) return `Repo pushed: ${repoName}`;
   const shown = subjects.slice(0, MAX_COMMITS_LISTED);
@@ -290,6 +320,8 @@ export async function checkGitHub(state: WatchState, opts: WatchOpts = {}): Prom
         findings.push({
           source: 'github',
           trust: 'official',
+          kind: 'new_repo',
+          title: `NEW REPO ${item.name}`,
           summary: `NEW REPO in flop-labs: ${item.name}${desc} (a brand-new repo is the highest-value signal)`,
           detail: item.html_url,
           at,
@@ -315,6 +347,8 @@ export async function checkGitHub(state: WatchState, opts: WatchOpts = {}): Prom
           findings.push({
             source: 'github',
             trust: 'official',
+            kind: 'repo_push',
+            title: pushTitle(item.name, result.subjects[0]),
             summary: formatPushFinding(item.name, result.subjects),
             detail: item.html_url,
             at,
@@ -326,6 +360,8 @@ export async function checkGitHub(state: WatchState, opts: WatchOpts = {}): Prom
           findings.push({
             source: 'github',
             trust: 'official',
+            kind: 'repo_push',
+            title: pushTitle(item.name, undefined),
             summary: `Repo pushed: ${item.name} (commit detail unavailable)`,
             detail: item.html_url,
             at,
@@ -338,34 +374,143 @@ export async function checkGitHub(state: WatchState, opts: WatchOpts = {}): Prom
   return findings;
 }
 
+/** At most this many sentences (removed + added together) are listed per page. */
+const MAX_DIFF_SENTENCES = 8;
+/** Each listed sentence is cut to about this many characters. */
+const MAX_DIFF_SENTENCE_LEN = 200;
+
+function sentences(text: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of text.split(/(?<=[.!?])\s+/)) {
+    const s = raw.replace(/\s+/g, ' ').trim();
+    if (s === '' || seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+  }
+  return out;
+}
+
+function clip(s: string): string {
+  // A page controls this text, and the result lands in a Markdown issue body
+  // inside a code fence: a literal fence in a sentence must not close it.
+  const safe = s.replace(/```/g, "'''");
+  return safe.length > MAX_DIFF_SENTENCE_LEN ? safe.slice(0, MAX_DIFF_SENTENCE_LEN - 1) + '…' : safe;
+}
+
+/**
+ * A deliberately dumb sentence-level diff: split both texts into
+ * whitespace-normalised sentences and take the set difference each way.
+ * Order changes are invisible by design — it answers "what was said before
+ * that is no longer said, and what is said now that was not", which is the
+ * question a reader of an alert has.
+ *
+ * Output is a fenced `diff` block, `-` for removed and `+` for added. The
+ * budget is shared (`MAX_DIFF_SENTENCES` in total), split evenly unless one
+ * side is short and leaves room for the other, so a page rewrite shows both
+ * what went and what came. Anything beyond the budget is only counted.
+ */
+export function diffSentences(oldText: string, newText: string): string {
+  const before = sentences(oldText);
+  const after = sentences(newText);
+  const beforeSet = new Set(before);
+  const afterSet = new Set(after);
+  const removed = before.filter((x) => !afterSet.has(x));
+  const added = after.filter((x) => !beforeSet.has(x));
+
+  const half = MAX_DIFF_SENTENCES / 2;
+  const removedShown = Math.min(removed.length, Math.max(half, MAX_DIFF_SENTENCES - added.length));
+  const addedShown = Math.min(added.length, MAX_DIFF_SENTENCES - removedShown);
+  const omitted = removed.length + added.length - removedShown - addedShown;
+
+  const lines = ['```diff'];
+  for (const x of removed.slice(0, removedShown)) lines.push(`- ${clip(x)}`);
+  for (const x of added.slice(0, addedShown)) lines.push(`+ ${clip(x)}`);
+  if (removed.length + added.length === 0) {
+    lines.push('(no sentence was added or removed; only wording order or non-text content changed)');
+  }
+  if (omitted > 0) lines.push(`... ${omitted} more sentence(s) omitted`);
+  lines.push('```');
+  return lines.join('\n');
+}
+
+function pageTitle(url: string): string {
+  const u = new URL(url);
+  return `${u.hostname} changed: ${u.pathname}`;
+}
+
 /**
  * The first run has no baseline to compare against, so it only records
- * hashes and reports nothing — anything else would mean every fresh install
- * of this tool alerts on the entirety of flop.finance's current content.
+ * hashes (and text) and reports nothing — anything else would mean every
+ * fresh install of this tool alerts on the entirety of flop.finance's
+ * current content.
+ *
+ * The hash in `state.pages` remains the change test. `state.page_text` is
+ * kept only so a change can be explained. State cached by the workflow
+ * before `page_text` existed has hashes and no text; for those pages an
+ * unchanged hash just back-fills the text silently, and a changed hash
+ * still alerts, saying plainly that no diff is available this once.
  */
 export async function checkPages(state: WatchState, opts: WatchOpts = {}): Promise<Finding[]> {
   const doFetch = opts.fetchImpl ?? fetch;
   const nowMs = opts.nowMs ?? Date.now;
   const at = new Date(nowMs()).toISOString();
   const findings: Finding[] = [];
+  state.page_text = state.page_text ?? {};
   for (const url of PAGES) {
     const res = await doFetch(url);
     if (!res.ok) throw new Error(`GET ${url} failed: ${res.status}`);
     const html = await res.text();
-    const hash = textHash(html);
+    const text = extractText(html);
+    const hash = createHash('sha256').update(text).digest('hex');
     const prior = state.pages[url];
     if (prior !== undefined && prior !== hash) {
+      const priorText = state.page_text[url];
+      const summary =
+        priorText === undefined
+          ? `Page content changed: ${url} — the previous text was not retained, so no diff is available this once`
+          : `Page content changed: ${url}\n${diffSentences(priorText, text)}`;
       findings.push({
         source: 'web',
         trust: 'official',
-        summary: `Page content changed: ${url}`,
+        kind: 'page_change',
+        title: pageTitle(url),
+        summary,
         detail: url,
         at,
       });
     }
     state.pages[url] = hash;
+    state.page_text[url] = text;
   }
   return findings;
+}
+
+const KIND_PRIORITY: Record<string, number> = { new_repo: 0, page_change: 1, repo_push: 2 };
+const MAX_HEADLINE_LEN = 100;
+
+/**
+ * A short title for the one official finding that matters most, so a
+ * notification list shows the contest repo rather than 77 identical
+ * "new activity" lines (issue #43, `technocore-close-call-challenge`, was
+ * buried exactly that way). Chat findings never contribute: with no official
+ * finding there is nothing worth an issue and this returns null.
+ *
+ * Priority: new repo, then page change, then push; the first finding of the
+ * winning kind is named and the remaining official findings are counted.
+ */
+export function headline(findings: Finding[]): string | null {
+  const official = findings.filter((f) => f.trust === 'official');
+  if (official.length === 0) return null;
+  const rank = (f: Finding) => KIND_PRIORITY[f.kind ?? ''] ?? 3;
+  let top = official[0];
+  for (const f of official) if (rank(f) < rank(top)) top = f;
+
+  const others = official.length - 1;
+  const suffix = others > 0 ? ` (+${others} more)` : '';
+  const text = (top.title ?? top.summary).replace(/\s+/g, ' ').trim();
+  const room = MAX_HEADLINE_LEN - suffix.length;
+  return (text.length > room ? text.slice(0, room - 1) + '…' : text) + suffix;
 }
 
 function matchesKeyword(text: string): boolean {
@@ -421,6 +566,7 @@ export async function checkRooms(state: WatchState, opts: WatchOpts = {}): Promi
       findings.push({
         source: 'chat',
         trust: 'unverified',
+        kind: 'chat',
         summary: `Keyword match in #${room}: "${m.text.slice(0, 120)}"`,
         detail: `${room}#${m.seq}`,
         at,
@@ -431,6 +577,7 @@ export async function checkRooms(state: WatchState, opts: WatchOpts = {}): Promi
       findings.push({
         source: 'chat',
         trust: 'unverified',
+        kind: 'chat',
         summary: `${suppressed} more keyword match(es) in #${room} suppressed (capped at ${MAX_CHAT_FINDINGS_PER_ROOM} per run)`,
         detail: room,
         at,

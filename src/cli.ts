@@ -15,7 +15,7 @@ import { buildReport } from './report.js';
 import { DEFAULT_BASE, fetchLatestSeq } from './client.js';
 import { assertSafeRoom } from './room.js';
 import { confirmRoom, loadConfirmations, unconfirmedReceipts } from './confirm.js';
-import { runWatch } from './watch.js';
+import { runWatch, headline, type Finding } from './watch.js';
 import { captureSelfEvidence, verifySelfEvidence, roomsFromLatestEvidence } from './evidence.js';
 import { decodeDidKey, encodeDidKey } from './didkey.js';
 
@@ -236,6 +236,10 @@ async function cmdConfirm(io: Io, room: string): Promise<number> {
 
 async function cmdWatch(io: Io): Promise<number> {
   const { findings, baselined } = await runWatch();
+  // First line, before anything else: the workflow lifts it into the issue
+  // title. Printed only when an official finding exists.
+  const title = headline(findings);
+  if (title !== null) io.out(`HEADLINE: ${title}`);
   const baselineParts: string[] = [];
   if (baselined.github) baselineParts.push(`github (${baselined.repoCount} repos)`);
   if (baselined.rooms.length > 0) baselineParts.push(`rooms (${baselined.rooms.length} rooms)`);
@@ -250,18 +254,30 @@ async function cmdWatch(io: Io): Promise<number> {
   const unverified = findings.filter((f) => f.trust === 'unverified');
   if (official.length > 0) {
     io.out('## Official (GitHub / flop.finance)');
-    for (const f of official) {
-      io.out(`- ${f.summary} (${f.detail})`);
-    }
+    for (const f of official) printFinding(io, f);
   }
   if (unverified.length > 0) {
     if (official.length > 0) io.out('');
     io.out('## Unverified chat chatter — unconfirmed by any official source, proves nothing on its own');
-    for (const f of unverified) {
-      io.out(`- ${f.summary} (${f.detail})`);
-    }
+    for (const f of unverified) printFinding(io, f);
   }
-  return 10;
+  // Exit 10 opens a GitHub issue, so it is reserved for official findings.
+  // Chat findings are printed above (the CI log keeps them) but never
+  // escalate: a room name, a nickname and a message body are all
+  // caller-supplied, so nothing about a chat hit can be trusted. Letting
+  // them open issues buried the one that mattered: in a month of runs,
+  // 78 of the 100 most recent issues held only unverified chat hits (mostly
+  // one bot repeating a hallucinated faucet line), and issue #43, the
+  // technocore-close-call-challenge repo, went unseen among them. Do not
+  // restore "any finding exits 10".
+  return official.length > 0 ? 10 : 0;
+}
+
+/** A finding's first summary line carries its detail; any further lines (a page diff) follow as-is. */
+function printFinding(io: Io, f: Finding): void {
+  const [first, ...rest] = f.summary.split('\n');
+  io.out(`- ${first} (${f.detail})`);
+  for (const line of rest) io.out(line);
 }
 
 /**

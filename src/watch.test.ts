@@ -12,6 +12,8 @@ import {
   checkPages,
   checkRooms,
   runWatch,
+  headline,
+  diffSentences,
   type WatchState,
   type Finding,
 } from './watch.js';
@@ -22,7 +24,7 @@ function isolate() {
 }
 
 function freshState(): WatchState {
-  return { v: 1, repos: {}, pages: {}, rooms: {}, last_run: new Date(0).toISOString() };
+  return { v: 1, repos: {}, pages: {}, page_text: {}, rooms: {}, last_run: new Date(0).toISOString() };
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -72,6 +74,7 @@ test('watch state round-trips through save and load', () => {
     v: 1,
     repos: { tclk: '2026-01-01T00:00:00Z' },
     pages: { 'https://flop.finance/': 'deadbeef' },
+    page_text: { 'https://flop.finance/': 'Coming soon' },
     rooms: { technocore: 42 },
     last_run: '2026-01-01T00:00:00Z',
   };
@@ -323,7 +326,7 @@ test('more than five new commits are capped with a remainder count', async () =>
 
 test('checkGitHub does not throw when state has no repo_commits at all (currently committed shape)', async () => {
   isolate();
-  const state: WatchState = { v: 1, repos: { tclk: '2026-01-01T00:00:00Z' }, pages: {}, rooms: {}, last_run: new Date(0).toISOString() };
+  const state: WatchState = { v: 1, repos: { tclk: '2026-01-01T00:00:00Z' }, pages: {}, page_text: {}, rooms: {}, last_run: new Date(0).toISOString() };
   delete (state as { repo_commits?: unknown }).repo_commits;
   const calls: string[] = [];
   const fetchImpl = githubFetch({
@@ -539,4 +542,190 @@ test('runWatch reports which sources were baselined on a first run, and none on 
   const second = await runWatch({ fetchImpl });
   assert.equal(second.baselined.github, false);
   assert.deepEqual(second.baselined.rooms, []);
+});
+
+// --- headline ---------------------------------------------------------------
+
+function official(kind: Finding['kind'], title: string): Finding {
+  return { source: kind === 'page_change' ? 'web' : 'github', trust: 'official', kind, title, summary: `summary of ${title}`, detail: 'd', at: 't' };
+}
+function chat(): Finding {
+  return { source: 'chat', trust: 'unverified', kind: 'chat', summary: 'Keyword match', detail: 'r#1', at: 't' };
+}
+
+test('headline is null when there are no findings or only chat findings', () => {
+  assert.equal(headline([]), null);
+  assert.equal(headline([chat(), chat()]), null);
+});
+
+test('headline prefers a new repo over a page change over a push, whatever the input order', () => {
+  const push = official('repo_push', 'tclk pushed: wire up settlement rail');
+  const page = official('page_change', 'flop.finance changed: /teaser/');
+  const repo = official('new_repo', 'NEW REPO technocore-close-call-challenge');
+  assert.equal(headline([push, page, repo]), 'NEW REPO technocore-close-call-challenge (+2 more)');
+  assert.equal(headline([push, page]), 'flop.finance changed: /teaser/ (+1 more)');
+  assert.equal(headline([push]), 'tclk pushed: wire up settlement rail');
+});
+
+test('headline ignores chat findings in both the choice and the count', () => {
+  const repo = official('new_repo', 'NEW REPO x');
+  assert.equal(headline([chat(), repo, chat()]), 'NEW REPO x');
+});
+
+test('headline stays under about 100 characters for a long repo name, keeping the (+N more) suffix', () => {
+  const long = official('new_repo', 'NEW REPO ' + 'a'.repeat(300));
+  const h = headline([long, official('repo_push', 'x pushed'), official('repo_push', 'y pushed')]);
+  assert.ok(h !== null);
+  assert.ok(h.length <= 100, `length ${h.length}`);
+  assert.ok(h.endsWith(' (+2 more)'));
+  assert.ok(h.startsWith('NEW REPO aaa'));
+});
+
+test('headline collapses whitespace so a title is always a single line', () => {
+  const h = headline([official('repo_push', 'tclk pushed: line one\nline two')]);
+  assert.equal(h, 'tclk pushed: line one line two');
+});
+
+test('headline falls back to the summary for an official finding with no kind', () => {
+  const f: Finding = { source: 'github', trust: 'official', summary: 'Something odd', detail: 'd', at: 't' };
+  assert.equal(headline([f]), 'Something odd');
+});
+
+test('checkGitHub tags findings with kind and a short title', async () => {
+  isolate();
+  const state = freshState();
+  state.repos = { tclk: '2026-01-01T00:00:00Z' };
+  state.repo_commits = { tclk: 'sha-0' };
+  const fetchImpl = githubFetch({
+    repos: [
+      { name: 'tclk', pushed_at: '2026-06-01T00:00:00Z', description: null, html_url: 'https://github.com/flop-labs/tclk' },
+      { name: 'technocore-close-call-challenge', pushed_at: '2026-06-01T00:00:00Z', description: 'contest', html_url: 'https://github.com/flop-labs/technocore-close-call-challenge' },
+    ],
+    commitsByRepo: { tclk: [ghCommit('sha-1', 'wire up settlement rail\n\nbody'), ghCommit('sha-0', 'older')] },
+    calls: [],
+  });
+  const findings = await checkGitHub(state, { fetchImpl });
+  const repo = findings.find((f) => f.kind === 'new_repo');
+  const push = findings.find((f) => f.kind === 'repo_push');
+  assert.equal(repo?.title, 'NEW REPO technocore-close-call-challenge');
+  assert.equal(push?.title, 'tclk pushed: wire up settlement rail');
+});
+
+test('checkRooms tags every chat finding with kind chat', async () => {
+  isolate();
+  const state = stateWithRoomBaseline({ technocore: 1, flop_labs: 1, 'technocore-genesis': 1 });
+  const fetchImpl = fakeRoomFetch({ technocore: [{ seq: 2, ts: 't', from: '~a', text: 'faucet is live' }] });
+  const findings = await checkRooms(state, { fetchImpl });
+  assert.ok(findings.length > 0);
+  for (const f of findings) assert.equal(f.kind, 'chat');
+});
+
+// --- page diffs ---------------------------------------------------------------
+
+const PAGE_URLS = [
+  'https://flop.finance/',
+  'https://flop.finance/teaser/',
+  'https://flop.finance/intro/',
+  'https://flop.finance/intro/yellowpaper/',
+];
+
+/** Serves `byUrl[url]` as the body of each page, defaulting to a constant. */
+function pageFetch(byUrl: Record<string, string>): typeof fetch {
+  return (async (url: string | URL) => {
+    const body = byUrl[String(url)] ?? 'Stable page.';
+    return new Response(`<html><body>${body}</body></html>`);
+  }) as unknown as typeof fetch;
+}
+
+const TEASER = 'https://flop.finance/teaser/';
+
+test('a changed page reports the removed and added sentences with - and +', async () => {
+  isolate();
+  const state = freshState();
+  await checkPages(state, {
+    fetchImpl: pageFetch({ [TEASER]: 'Welcome to FLOP. every 3 $FLOP spent on inference unlocks 1 airdropped $FLOP. Join us.' }),
+  });
+  const findings = await checkPages(state, {
+    fetchImpl: pageFetch({ [TEASER]: 'Welcome to FLOP. The unlock schedule is not set. Join us.' }),
+  });
+  assert.equal(findings.length, 1);
+  const f = findings[0];
+  assert.equal(f.kind, 'page_change');
+  assert.equal(f.title, 'flop.finance changed: /teaser/');
+  assert.match(f.summary, /^- every 3 \$FLOP spent on inference unlocks 1 airdropped \$FLOP\.$/m);
+  assert.match(f.summary, /^\+ The unlock schedule is not set\.$/m);
+  assert.ok(!f.summary.includes('Join us'), 'unchanged sentences are not listed');
+  assert.ok(f.summary.startsWith(`Page content changed: ${TEASER}`));
+  assert.equal(state.page_text[TEASER], 'Welcome to FLOP. The unlock schedule is not set. Join us.');
+});
+
+test('checkPages stores page text on the first run', async () => {
+  isolate();
+  const state = freshState();
+  await checkPages(state, { fetchImpl: pageFetch({}) });
+  for (const u of PAGE_URLS) assert.equal(state.page_text[u], 'Stable page.');
+});
+
+test('a page diff is capped at eight sentences, each truncated, and reports the omitted count', () => {
+  const oldText = Array.from({ length: 12 }, (_, i) => `Old sentence number ${i}.`).join(' ');
+  const longNew = 'N'.repeat(500) + '.';
+  const newText = [longNew, ...Array.from({ length: 11 }, (_, i) => `New sentence number ${i}.`)].join(' ');
+  const out = diffSentences(oldText, newText);
+  const lines = out.split('\n').filter((l) => /^[-+] /.test(l));
+  assert.equal(lines.length, 8);
+  assert.ok(lines.every((l) => l.length <= 2 + 200), 'each sentence truncated to about 200 chars');
+  assert.ok(lines.some((l) => l.startsWith('+ NNN')), 'the long sentence appears, truncated');
+  assert.ok(lines.some((l) => l.startsWith('- ')) && lines.some((l) => l.startsWith('+ ')), 'both sides represented');
+  assert.match(out, /16 more sentence\(s\) omitted/);
+});
+
+test('a one-sided rewrite still shows up to eight sentences and counts the rest', () => {
+  const oldText = Array.from({ length: 30 }, (_, i) => `Old ${i}.`).join(' ');
+  const out = diffSentences(oldText, 'Brand new.');
+  const lines = out.split('\n').filter((l) => /^[-+] /.test(l));
+  assert.equal(lines.length, 8);
+  assert.ok(lines.includes('+ Brand new.'));
+  assert.match(out, /23 more sentence\(s\) omitted/);
+});
+
+test('a sentence containing a code fence cannot break out of the diff block', () => {
+  const out = diffSentences('Same.', 'Same. Evil ``` fence.');
+  assert.ok(!out.split('\n').slice(1, -1).some((l) => l.includes('```')));
+});
+
+test('legacy state: hash unchanged and no stored text stores the text and emits nothing', async () => {
+  isolate();
+  const state = freshState();
+  await checkPages(state, { fetchImpl: pageFetch({}) });
+  const legacy = { ...state, page_text: undefined } as unknown as WatchState;
+  delete (legacy as { page_text?: unknown }).page_text;
+  const findings = await checkPages(legacy, { fetchImpl: pageFetch({}) });
+  assert.equal(findings.length, 0);
+  for (const u of PAGE_URLS) assert.equal(legacy.page_text[u], 'Stable page.');
+});
+
+test('legacy state: hash changed and no stored text says no diff is available, then stores the text', async () => {
+  isolate();
+  const state = freshState();
+  await checkPages(state, { fetchImpl: pageFetch({}) });
+  const legacy = { ...state } as WatchState;
+  delete (legacy as { page_text?: unknown }).page_text;
+  const findings = await checkPages(legacy, { fetchImpl: pageFetch({ [TEASER]: 'Something new.' }) });
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].kind, 'page_change');
+  assert.equal(findings[0].trust, 'official');
+  assert.match(findings[0].summary, /no diff is available/i);
+  assert.equal(legacy.page_text[TEASER], 'Something new.');
+  // And the next change does produce a diff.
+  const next = await checkPages(legacy, { fetchImpl: pageFetch({ [TEASER]: 'Something newer.' }) });
+  assert.match(next[0].summary, /^- Something new\.$/m);
+  assert.match(next[0].summary, /^\+ Something newer\.$/m);
+});
+
+test('loadWatchState accepts a legacy state file with no page_text and supplies an empty one', () => {
+  isolate();
+  saveWatchState({ v: 1, repos: {}, pages: { 'https://flop.finance/': 'h' }, rooms: {}, last_run: 'x' } as unknown as WatchState);
+  const loaded = loadWatchState();
+  assert.deepEqual(loaded.page_text, {});
+  assert.equal(loaded.pages['https://flop.finance/'], 'h');
 });

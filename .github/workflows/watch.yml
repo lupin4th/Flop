@@ -71,7 +71,16 @@ jobs:
         if: steps.run_watch.outputs.exit_code == '10'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # `watch` exits 10 only for official findings, and prints a first
+        # line `HEADLINE: <text>` naming the most important one (a new repo
+        # beats a page change beats a push). That text becomes the issue
+        # title so the one that matters is distinguishable in a list. If the
+        # line is somehow absent, fall back to the generic title.
         run: |
+          TITLE=$(sed -n 's/^HEADLINE: //p' watch-output.txt | head -n 1)
+          if [ -z "$TITLE" ]; then
+            TITLE="technocore-attest watch: new activity detected ($(date -u +%Y-%m-%dT%H:%MZ))"
+          fi
           gh issue create \
-            --title "technocore-attest watch: new activity detected ($(date -u +%Y-%m-%dT%H:%MZ))" \
+            --title "$TITLE" \
             --body-file watch-output.txt
