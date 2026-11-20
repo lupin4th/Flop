@@ -148,9 +148,10 @@ function fakeFetchFor(overrides: { github?: unknown; roomMessages?: unknown[] } 
     if (s.includes('api.github.com')) {
       return new Response(JSON.stringify(overrides.github ?? []), { status: 200 });
     }
-    // Watched pages live on flop.finance and on the faucet's own origin;
-    // only technocore.chat URLs are rooms.
-    if (s.includes('flop.finance') || s.includes('faucet.flop.network')) {
+    // Watched pages live on flop.finance and on flop.network hosts; only
+    // technocore.chat URLs are rooms. (The npm registry lookup falls through
+    // to the room-shaped body below, which carries no version and is ignored.)
+    if (s.includes('flop.finance') || s.includes('flop.network')) {
       return new Response('<html><body>Coming soon</body></html>', { status: 200 });
     }
     return new Response(JSON.stringify({ messages: overrides.roomMessages ?? [] }), { status: 200 });

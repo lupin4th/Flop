@@ -12,6 +12,7 @@ import {
   saveWatchState,
   checkGitHub,
   checkPages,
+  checkReleases,
   checkRooms,
   runWatch,
   headline,
@@ -347,7 +348,7 @@ test('checkPages stores hashes and emits no findings on the first run', async ()
   const fetchImpl = (async () => new Response('<html><body>Coming soon</body></html>')) as unknown as typeof fetch;
   const findings = await checkPages(state, { fetchImpl });
   assert.equal(findings.length, 0);
-  assert.equal(Object.keys(state.pages).length, 7);
+  assert.equal(Object.keys(state.pages).length, 9);
 });
 
 test('checkPages emits an official finding when text changes on a later run', async () => {
@@ -356,13 +357,13 @@ test('checkPages emits an official finding when text changes on a later run', as
   let call = 0;
   const fetchImpl = (async () => {
     call++;
-    const changed = call > 7; // second pass over the same 7 pages
+    const changed = call > 9; // second pass over the same 9 pages
     return new Response(`<html><body>${changed ? 'Testnet is live' : 'Coming soon'}</body></html>`);
   }) as unknown as typeof fetch;
   const first = await checkPages(state, { fetchImpl });
   assert.equal(first.length, 0);
   const second = await checkPages(state, { fetchImpl });
-  assert.equal(second.length, 7);
+  assert.equal(second.length, 9);
   for (const f of second) {
     assert.equal(f.source, 'web');
     assert.equal(f.trust, 'official');
@@ -501,12 +502,12 @@ test('runWatch keeps checking pages and rooms even when the GitHub fetch throws'
   const fetchImpl = (async (url: string | URL) => {
     const s = String(url);
     if (s.includes('api.github.com')) throw new Error('network down');
-    if (s.includes('flop.finance') || s.includes('faucet.flop.network')) return new Response('<html><body>hi</body></html>');
+    if (s.includes('flop.finance') || s.includes('flop.network')) return new Response('<html><body>hi</body></html>');
     return jsonResponse({ messages: [] });
   }) as unknown as typeof fetch;
   const { findings, state } = await runWatch({ fetchImpl });
   assert.equal(findings.length, 0);
-  assert.equal(Object.keys(state.pages).length, 7);
+  assert.equal(Object.keys(state.pages).length, 9);
 });
 
 test('runWatch saves state exactly once at the end', async () => {
@@ -514,7 +515,7 @@ test('runWatch saves state exactly once at the end', async () => {
   const fetchImpl = (async (url: string | URL) => {
     const s = String(url);
     if (s.includes('api.github.com')) return jsonResponse([]);
-    if (s.includes('flop.finance') || s.includes('faucet.flop.network')) return new Response('<html><body>hi</body></html>');
+    if (s.includes('flop.finance') || s.includes('flop.network')) return new Response('<html><body>hi</body></html>');
     return jsonResponse({ messages: [] });
   }) as unknown as typeof fetch;
   const { state } = await runWatch({ fetchImpl });
@@ -531,7 +532,7 @@ test('runWatch reports which sources were baselined on a first run, and none on 
         { name: 'tclk', pushed_at: '2026-01-01T00:00:00Z', description: 'core', html_url: 'https://github.com/flop-labs/tclk' },
       ]);
     }
-    if (s.includes('flop.finance') || s.includes('faucet.flop.network')) return new Response('<html><body>hi</body></html>');
+    if (s.includes('flop.finance') || s.includes('flop.network')) return new Response('<html><body>hi</body></html>');
     return jsonResponse({ messages: [] });
   }) as unknown as typeof fetch;
 
@@ -632,6 +633,8 @@ const PAGE_URLS = [
   'https://flop.finance/testnet/',
   'https://flop.finance/airdrop/',
   'https://faucet.flop.network/chain',
+  'https://flop.network/llms.txt',
+  'https://ask.flop.finance/docs/send-to-specific-miner',
 ];
 
 /** Serves `byUrl[url]` as the body of each page, defaulting to a constant. */
@@ -905,4 +908,123 @@ test('an error body is never baselined as page content', async () => {
       : new Response('<html><body>Stable page.</body></html>')) as unknown as typeof fetch;
   await checkPages(state, { fetchImpl });
   assert.equal(state.pages[TESTNET], undefined);
+});
+
+// --- checkReleases ------------------------------------------------------------
+
+const CLI_TAGS = 'https://registry.npmjs.org/-/package/@flop-labs/cli/dist-tags';
+
+/** Serves `body` (a string, or an object to be JSON-encoded) for the CLI's dist-tags. */
+function tagsFetch(body: unknown, status = 200): typeof fetch {
+  return (async (url: string | URL) => {
+    assert.equal(String(url), CLI_TAGS);
+    return new Response(typeof body === 'string' ? body : JSON.stringify(body), { status });
+  }) as unknown as typeof fetch;
+}
+
+test('checkReleases baselines silently the first time it sees a package', async () => {
+  const state = freshState();
+  const findings = await checkReleases(state, { fetchImpl: tagsFetch({ latest: '0.7.1' }) });
+  assert.equal(findings.length, 0);
+  assert.deepEqual(state.releases, { '@flop-labs/cli': '0.7.1' });
+});
+
+test('checkReleases stays quiet on a patch release but remembers it', async () => {
+  const state = { ...freshState(), releases: { '@flop-labs/cli': '0.7.1' } };
+  const findings = await checkReleases(state, { fetchImpl: tagsFetch({ latest: '0.7.2' }) });
+  assert.equal(findings.length, 0);
+  assert.equal(state.releases['@flop-labs/cli'], '0.7.2');
+});
+
+test('checkReleases reports a new minor or major version as an official release', async () => {
+  for (const next of ['0.8.0', '1.0.0']) {
+    const state = { ...freshState(), releases: { '@flop-labs/cli': '0.7.2' } };
+    const findings = await checkReleases(state, { fetchImpl: tagsFetch({ latest: next }) });
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].trust, 'official');
+    assert.equal(findings[0].kind, 'release');
+    assert.equal(findings[0].title, `@flop-labs/cli released: ${next} (was 0.7.2)`);
+    assert.equal(state.releases['@flop-labs/cli'], next);
+  }
+});
+
+test('checkReleases compares version numbers as fields, not as text', async () => {
+  // 0.7.x -> 0.70.0 shares a prefix with the old minor; it is still a new line.
+  const state = { ...freshState(), releases: { '@flop-labs/cli': '0.7.9' } };
+  const findings = await checkReleases(state, { fetchImpl: tagsFetch({ latest: '0.70.0' }) });
+  assert.equal(findings.length, 1);
+});
+
+test('checkReleases ignores anything that is not a plain x.y.z version and keeps its baseline', async () => {
+  const bodies: unknown[] = [
+    { latest: '0.8.0-rc.1' },
+    { latest: '0.8.0\nINJECTED TITLE' },
+    { latest: 8 },
+    { next: '0.8.0' },
+    null,
+    [],
+    'not json at all',
+    '<html>503</html>',
+  ];
+  for (const body of bodies) {
+    const state = { ...freshState(), releases: { '@flop-labs/cli': '0.7.1' } };
+    const findings = await checkReleases(state, { fetchImpl: tagsFetch(body) });
+    assert.equal(findings.length, 0, JSON.stringify(body));
+    assert.equal(state.releases['@flop-labs/cli'], '0.7.1', JSON.stringify(body));
+  }
+});
+
+test('checkReleases survives an error status and a thrown fetch without touching state', async () => {
+  const state = { ...freshState(), releases: { '@flop-labs/cli': '0.7.1' } };
+  assert.equal((await checkReleases(state, { fetchImpl: tagsFetch({ latest: '9.9.9' }, 503) })).length, 0);
+  const boom = (async () => {
+    throw new Error('network down');
+  }) as unknown as typeof fetch;
+  assert.equal((await checkReleases(state, { fetchImpl: boom })).length, 0);
+  assert.equal(state.releases['@flop-labs/cli'], '0.7.1');
+});
+
+test('a state file written before `releases` existed still loads with its baselines intact', () => {
+  isolate();
+  const legacy: WatchState = { ...freshState(), repos: { tclk: '2026-01-01T00:00:00Z' }, pages: { 'https://flop.finance/': 'abc' } };
+  saveWatchState(legacy);
+  const loaded = loadWatchState();
+  assert.equal(loaded.repos.tclk, '2026-01-01T00:00:00Z');
+  assert.equal(loaded.pages['https://flop.finance/'], 'abc');
+  assert.equal(loaded.releases, undefined);
+});
+
+test('a state file carrying `releases` round-trips, and a malformed one resets rather than half-loads', () => {
+  isolate();
+  saveWatchState({ ...freshState(), releases: { '@flop-labs/cli': '0.7.1' } });
+  assert.deepEqual(loadWatchState().releases, { '@flop-labs/cli': '0.7.1' });
+  saveWatchState({ ...freshState(), releases: { '@flop-labs/cli': 7 } } as unknown as WatchState);
+  assert.equal(loadWatchState().releases, undefined);
+});
+
+test('headline ranks a release below a page change and above a push', () => {
+  const mk = (kind: Finding['kind'], title: string): Finding => ({
+    source: 'web', trust: 'official', kind, title, summary: title, detail: '', at: '2026-01-01T00:00:00.000Z',
+  });
+  const release = mk('release', '@flop-labs/cli released: 0.8.0 (was 0.7.2)');
+  assert.equal(headline([mk('repo_push', 'tclk pushed: x'), release]), '@flop-labs/cli released: 0.8.0 (was 0.7.2) (+1 more)');
+  assert.equal(headline([release, mk('page_change', 'flop.finance changed: /testnet/')]), 'flop.finance changed: /testnet/ (+1 more)');
+});
+
+test('runWatch baselines releases on a first run and reports a new release line on the next', async () => {
+  isolate();
+  let version = '0.7.1';
+  const fetchImpl = (async (url: string | URL) => {
+    const s = String(url);
+    if (s.includes('api.github.com')) return jsonResponse([]);
+    if (s.includes('registry.npmjs.org')) return jsonResponse({ latest: version });
+    if (s.includes('flop.finance') || s.includes('flop.network')) return new Response('<html><body>hi</body></html>');
+    return jsonResponse({ messages: [] });
+  }) as unknown as typeof fetch;
+  const first = await runWatch({ fetchImpl });
+  assert.equal(first.findings.length, 0);
+  assert.deepEqual(loadWatchState().releases, { '@flop-labs/cli': '0.7.1' });
+  version = '0.8.0';
+  const second = await runWatch({ fetchImpl });
+  assert.deepEqual(second.findings.map((f) => f.kind), ['release']);
 });

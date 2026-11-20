@@ -4,9 +4,11 @@ import { watchStatePath, ensureHome } from './paths.js';
 import { fetchRoom, type RoomMessage } from './client.js';
 
 /**
- * No signal here is ever treated as authoritative on its own. GitHub and
- * flop.finance are the only channels this tool labels `official`, because
- * they are the two channels FLOP Labs actually controls; everything seen in
+ * No signal here is ever treated as authoritative on its own. GitHub,
+ * flop.finance, the flop.network hosts that flop.finance itself links to,
+ * and the `@flop-labs` npm scope are the only channels this tool labels
+ * `official`, because they are the channels FLOP Labs actually controls;
+ * everything seen in
  * chat is unauthenticated third-party text with no discoverable "official
  * DID" to check it against (see the sonnet contest: the referee's identity
  * was pinned in a GitHub repo, never inferable from who posts in a room).
@@ -22,7 +24,7 @@ export type Finding = {
    * Optional so a finding built without it still type-checks; `headline`
    * ranks a kind-less official finding below every known kind.
    */
-  kind?: 'new_repo' | 'page_change' | 'repo_push' | 'chat';
+  kind?: 'new_repo' | 'page_change' | 'release' | 'repo_push' | 'chat';
   /**
    * A short, single-line phrase naming this finding for an issue title,
    * e.g. `NEW REPO foo`, `flop.finance changed: /teaser/`,
@@ -59,6 +61,12 @@ export type WatchState = {
    * `repos` and `rooms` already take toward an unseen key.
    */
   repo_commits?: Record<string, string>;
+  /**
+   * Latest published version of each watched npm package as of the last
+   * run. Optional for the same reason as `repo_commits`: every state file
+   * already cached by the workflow predates it and must still load.
+   */
+  releases?: Record<string, string>;
 };
 
 type WatchOpts = { fetchImpl?: typeof fetch; nowMs?: () => number };
@@ -80,7 +88,21 @@ const PAGES = [
   // or a re-keyed bot — and the bot DID must only ever be trusted from this
   // origin, never from a room.
   'https://faucet.flop.network/chain',
+  // As of 2026-11-20 an outside agent cannot buy inference on devnet: a
+  // direct session needs a miner's opt-in public endpoint and none is
+  // published. These two guides are where a public route for agents would
+  // be documented first. Both are static text and hashed identically
+  // across three consecutive fetches.
+  'https://flop.network/llms.txt',
+  'https://ask.flop.finance/docs/send-to-specific-miner',
 ];
+
+/**
+ * npm packages whose release line is worth an alert. The official CLI is
+ * the only way to open a paid session, and it already carries a `testnet`
+ * profile marked `planned` — the release that makes it live ships here.
+ */
+const NPM_PACKAGES = ['@flop-labs/cli'];
 
 // `lobby` is excluded on purpose: it runs at millions of seq and is pure
 // noise, so watching it would only slow every run down for nothing.
@@ -202,7 +224,9 @@ function isWatchState(value: unknown): value is WatchState {
     // `repo_commits` postdates every state file already on disk, so a
     // state written before this field existed simply lacks the key —
     // that must load cleanly, not fail validation.
-    (s.repo_commits === undefined || isRecordOf(s.repo_commits, isString))
+    (s.repo_commits === undefined || isRecordOf(s.repo_commits, isString)) &&
+    // Same again for `releases`.
+    (s.releases === undefined || isRecordOf(s.releases, isString))
   );
 }
 
@@ -597,7 +621,59 @@ export async function checkPages(state: WatchState, opts: WatchOpts = {}): Promi
   return findings;
 }
 
-const KIND_PRIORITY: Record<string, number> = { new_repo: 0, page_change: 1, repo_push: 2 };
+const KIND_PRIORITY: Record<string, number> = { new_repo: 0, page_change: 1, release: 2, repo_push: 3 };
+
+function distTagsUrl(pkg: string): string {
+  return `https://registry.npmjs.org/-/package/${pkg}/dist-tags`;
+}
+
+// Strict on purpose: these digits end up in an issue title, and a
+// pre-release tag is not a release line worth an alert.
+const RELEASE_VERSION = /^(\d{1,6})\.(\d{1,6})\.(\d{1,6})$/;
+
+/**
+ * Reports a watched npm package moving to a new major or minor version.
+ * Patch releases only update the stored version: the CLI shipped four of
+ * them in two days (0.4.1–0.4.4), and an alert per patch is exactly the
+ * noise that once buried a real announcement. Like every other source the
+ * first sight of a package is a silent baseline, and a failed or malformed
+ * response leaves the stored version untouched.
+ */
+export async function checkReleases(state: WatchState, opts: WatchOpts = {}): Promise<Finding[]> {
+  const doFetch = opts.fetchImpl ?? fetch;
+  const nowMs = opts.nowMs ?? Date.now;
+  const at = new Date(nowMs()).toISOString();
+  const findings: Finding[] = [];
+  for (const pkg of NPM_PACKAGES) {
+    let latest: unknown;
+    try {
+      const res = await doFetch(distTagsUrl(pkg));
+      if (!res.ok) continue;
+      latest = (JSON.parse(await res.text()) as { latest?: unknown } | null)?.latest;
+    } catch {
+      continue;
+    }
+    if (typeof latest !== 'string') continue;
+    const now = RELEASE_VERSION.exec(latest);
+    if (!now) continue;
+    const prior = state.releases?.[pkg];
+    const was = prior === undefined ? null : RELEASE_VERSION.exec(prior);
+    if (was && (was[1] !== now[1] || was[2] !== now[2])) {
+      findings.push({
+        source: 'web',
+        trust: 'official',
+        kind: 'release',
+        title: `${pkg} released: ${latest} (was ${prior})`,
+        summary: `New release line of ${pkg}: ${prior} -> ${latest}. Patch releases are not reported.`,
+        detail: `https://www.npmjs.com/package/${pkg}`,
+        at,
+      });
+    }
+    state.releases = state.releases ?? {};
+    state.releases[pkg] = latest;
+  }
+  return findings;
+}
 const MAX_HEADLINE_LEN = 100;
 
 /**
@@ -607,13 +683,13 @@ const MAX_HEADLINE_LEN = 100;
  * buried exactly that way). Chat findings never contribute: with no official
  * finding there is nothing worth an issue and this returns null.
  *
- * Priority: new repo, then page change, then push; the first finding of the
+ * Priority: new repo, then page change, then release, then push; the first finding of the
  * winning kind is named and the remaining official findings are counted.
  */
 export function headline(findings: Finding[]): string | null {
   const official = findings.filter((f) => f.trust === 'official');
   if (official.length === 0) return null;
-  const rank = (f: Finding) => KIND_PRIORITY[f.kind ?? ''] ?? 3;
+  const rank = (f: Finding) => KIND_PRIORITY[f.kind ?? ''] ?? 4;
   let top = official[0];
   for (const f of official) if (rank(f) < rank(top)) top = f;
 
@@ -732,6 +808,11 @@ export async function runWatch(
   }
   try {
     findings.push(...(await checkPages(state, opts)));
+  } catch {
+    // continue: same reasoning as above
+  }
+  try {
+    findings.push(...(await checkReleases(state, opts)));
   } catch {
     // continue: same reasoning as above
   }
