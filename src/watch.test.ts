@@ -347,7 +347,7 @@ test('checkPages stores hashes and emits no findings on the first run', async ()
   const fetchImpl = (async () => new Response('<html><body>Coming soon</body></html>')) as unknown as typeof fetch;
   const findings = await checkPages(state, { fetchImpl });
   assert.equal(findings.length, 0);
-  assert.equal(Object.keys(state.pages).length, 4);
+  assert.equal(Object.keys(state.pages).length, 7);
 });
 
 test('checkPages emits an official finding when text changes on a later run', async () => {
@@ -356,13 +356,13 @@ test('checkPages emits an official finding when text changes on a later run', as
   let call = 0;
   const fetchImpl = (async () => {
     call++;
-    const changed = call > 4; // second pass over the same 4 pages
+    const changed = call > 7; // second pass over the same 7 pages
     return new Response(`<html><body>${changed ? 'Testnet is live' : 'Coming soon'}</body></html>`);
   }) as unknown as typeof fetch;
   const first = await checkPages(state, { fetchImpl });
   assert.equal(first.length, 0);
   const second = await checkPages(state, { fetchImpl });
-  assert.equal(second.length, 4);
+  assert.equal(second.length, 7);
   for (const f of second) {
     assert.equal(f.source, 'web');
     assert.equal(f.trust, 'official');
@@ -501,12 +501,12 @@ test('runWatch keeps checking pages and rooms even when the GitHub fetch throws'
   const fetchImpl = (async (url: string | URL) => {
     const s = String(url);
     if (s.includes('api.github.com')) throw new Error('network down');
-    if (s.includes('flop.finance')) return new Response('<html><body>hi</body></html>');
+    if (s.includes('flop.finance') || s.includes('faucet.flop.network')) return new Response('<html><body>hi</body></html>');
     return jsonResponse({ messages: [] });
   }) as unknown as typeof fetch;
   const { findings, state } = await runWatch({ fetchImpl });
   assert.equal(findings.length, 0);
-  assert.equal(Object.keys(state.pages).length, 4);
+  assert.equal(Object.keys(state.pages).length, 7);
 });
 
 test('runWatch saves state exactly once at the end', async () => {
@@ -514,7 +514,7 @@ test('runWatch saves state exactly once at the end', async () => {
   const fetchImpl = (async (url: string | URL) => {
     const s = String(url);
     if (s.includes('api.github.com')) return jsonResponse([]);
-    if (s.includes('flop.finance')) return new Response('<html><body>hi</body></html>');
+    if (s.includes('flop.finance') || s.includes('faucet.flop.network')) return new Response('<html><body>hi</body></html>');
     return jsonResponse({ messages: [] });
   }) as unknown as typeof fetch;
   const { state } = await runWatch({ fetchImpl });
@@ -531,7 +531,7 @@ test('runWatch reports which sources were baselined on a first run, and none on 
         { name: 'tclk', pushed_at: '2026-01-01T00:00:00Z', description: 'core', html_url: 'https://github.com/flop-labs/tclk' },
       ]);
     }
-    if (s.includes('flop.finance')) return new Response('<html><body>hi</body></html>');
+    if (s.includes('flop.finance') || s.includes('faucet.flop.network')) return new Response('<html><body>hi</body></html>');
     return jsonResponse({ messages: [] });
   }) as unknown as typeof fetch;
 
@@ -629,6 +629,9 @@ const PAGE_URLS = [
   'https://flop.finance/teaser/',
   'https://flop.finance/intro/',
   'https://flop.finance/intro/yellowpaper/',
+  'https://flop.finance/testnet/',
+  'https://flop.finance/airdrop/',
+  'https://faucet.flop.network/chain',
 ];
 
 /** Serves `byUrl[url]` as the body of each page, defaulting to a constant. */
@@ -811,4 +814,95 @@ test('unpaired lines keep start-truncation', () => {
   assert.ok(minus.startsWith('- QQQ'));
   assert.ok(minus.endsWith('…'));
   assert.ok(minus.length <= 202);
+});
+
+// --- testnet-launch pages -------------------------------------------------------
+
+const TESTNET = 'https://flop.finance/testnet/';
+const AIRDROP = 'https://flop.finance/airdrop/';
+const FAUCET_CHAIN = 'https://faucet.flop.network/chain';
+
+test('checkPages watches the testnet, airdrop and faucet-chain pages', async () => {
+  isolate();
+  const seen: string[] = [];
+  const fetchImpl = (async (url: string | URL) => {
+    seen.push(String(url));
+    return new Response('<html><body>Stable page.</body></html>');
+  }) as unknown as typeof fetch;
+  await checkPages(freshState(), { fetchImpl });
+  for (const u of [TESTNET, AIRDROP, FAUCET_CHAIN]) {
+    assert.ok(seen.includes(u), `${u} must be fetched`);
+  }
+});
+
+test('pages new to an existing baseline are recorded silently, not reported', async () => {
+  // The state cached by CI already holds the four original pages. The first
+  // run after this deploy meets three pages it has never seen; alerting on
+  // them would be a false "changed" for content that merely became watched.
+  isolate();
+  const state = freshState();
+  const original = {
+    'https://flop.finance/': 'Stable page.',
+    'https://flop.finance/teaser/': 'Stable page.',
+  };
+  await checkPages(state, { fetchImpl: pageFetch(original) });
+  delete state.pages[TESTNET];
+  delete state.page_text[TESTNET];
+  const findings = await checkPages(state, { fetchImpl: pageFetch(original) });
+  assert.equal(findings.length, 0);
+  assert.ok(state.pages[TESTNET], 'the new page is baselined');
+});
+
+test('a change on the testnet page is titled by its host and path', async () => {
+  isolate();
+  const state = freshState();
+  await checkPages(state, { fetchImpl: pageFetch({ [TESTNET]: 'Status Draft. Opens Q4 2026.' }) });
+  const findings = await checkPages(state, { fetchImpl: pageFetch({ [TESTNET]: 'Status Live. Opened today.' }) });
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].title, 'flop.finance changed: /testnet/');
+  assert.match(findings[0].summary, /^\+ Status Live\.$/m);
+});
+
+test('a change in the faucet chain descriptor is titled by the faucet host', async () => {
+  isolate();
+  const state = freshState();
+  await checkPages(state, { fetchImpl: pageFetch({ [FAUCET_CHAIN]: '{"network":"devnet"}' }) });
+  const findings = await checkPages(state, { fetchImpl: pageFetch({ [FAUCET_CHAIN]: '{"network":"testnet"}' }) });
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].title, 'faucet.flop.network changed: /chain');
+});
+
+test('one failing page does not stop the others from being checked', async () => {
+  // Before this, a non-ok response threw out of the loop, so an outage on
+  // one page silently skipped every page after it for that run.
+  isolate();
+  const state = freshState();
+  await checkPages(state, { fetchImpl: pageFetch({ [TESTNET]: 'Opens Q4 2026.' }) });
+  const priorHash = state.pages['https://flop.finance/'];
+
+  const fetchImpl = (async (url: string | URL) => {
+    const s = String(url);
+    if (s === 'https://flop.finance/') return new Response('down', { status: 503 });
+    if (s === FAUCET_CHAIN) throw new Error('connection reset');
+    const body = s === TESTNET ? 'Testnet is open.' : 'Stable page.';
+    return new Response(`<html><body>${body}</body></html>`);
+  }) as unknown as typeof fetch;
+
+  const findings = await checkPages(state, { fetchImpl });
+  assert.equal(findings.length, 1, 'the testnet change is still reported');
+  assert.equal(findings[0].title, 'flop.finance changed: /testnet/');
+  assert.equal(state.pages['https://flop.finance/'], priorHash, 'a failed page keeps its baseline');
+});
+
+test('an error body is never baselined as page content', async () => {
+  // Otherwise a 503 page would be stored, and the recovery would read as a
+  // "change" from the error text back to the real content.
+  isolate();
+  const state = freshState();
+  const fetchImpl = (async (url: string | URL) =>
+    String(url) === TESTNET
+      ? new Response('Service Unavailable', { status: 503 })
+      : new Response('<html><body>Stable page.</body></html>')) as unknown as typeof fetch;
+  await checkPages(state, { fetchImpl });
+  assert.equal(state.pages[TESTNET], undefined);
 });

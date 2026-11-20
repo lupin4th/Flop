@@ -148,7 +148,9 @@ function fakeFetchFor(overrides: { github?: unknown; roomMessages?: unknown[] } 
     if (s.includes('api.github.com')) {
       return new Response(JSON.stringify(overrides.github ?? []), { status: 200 });
     }
-    if (s.includes('flop.finance')) {
+    // Watched pages live on flop.finance and on the faucet's own origin;
+    // only technocore.chat URLs are rooms.
+    if (s.includes('flop.finance') || s.includes('faucet.flop.network')) {
       return new Response('<html><body>Coming soon</body></html>', { status: 200 });
     }
     return new Response(JSON.stringify({ messages: overrides.roomMessages ?? [] }), { status: 200 });

@@ -70,6 +70,16 @@ const PAGES = [
   'https://flop.finance/teaser/',
   'https://flop.finance/intro/',
   'https://flop.finance/intro/yellowpaper/',
+  // The testnet is "the sole route to the genesis airdrop", and these two
+  // pages carry its status line, rules and allocation terms — the launch
+  // announcement lands here before anywhere else on the site.
+  'https://flop.finance/testnet/',
+  'https://flop.finance/airdrop/',
+  // The faucet's own chain descriptor: network name, genesis hash, RPC and
+  // the DID of its Technocore bot. A change here means a new or reset chain,
+  // or a re-keyed bot — and the bot DID must only ever be trusted from this
+  // origin, never from a room.
+  'https://faucet.flop.network/chain',
 ];
 
 // `lobby` is excluded on purpose: it runs at millions of seq and is pure
@@ -548,9 +558,18 @@ export async function checkPages(state: WatchState, opts: WatchOpts = {}): Promi
   const findings: Finding[] = [];
   state.page_text = state.page_text ?? {};
   for (const url of PAGES) {
-    const res = await doFetch(url);
-    if (!res.ok) throw new Error(`GET ${url} failed: ${res.status}`);
-    const html = await res.text();
+    // Each page stands alone: an outage on one must not skip the pages after
+    // it, and an error body must never be stored as that page's baseline —
+    // the recovery would then read as a change. A failed page simply keeps
+    // whatever baseline it had and is tried again next run.
+    let html: string;
+    try {
+      const res = await doFetch(url);
+      if (!res.ok) continue;
+      html = await res.text();
+    } catch {
+      continue;
+    }
     // The hash is still of `extractText` (see the warning there); the
     // block-structured text is stored only to explain a change.
     const hash = textHash(html);
