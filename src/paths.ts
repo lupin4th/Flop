@@ -23,6 +23,22 @@ export function watchStatePath(): string {
   return join(attestHome(), 'watch-state.json');
 }
 
+/**
+ * Unattended signing only: a file holding the key's passphrase, written by
+ * the owner and readable by the owner alone. See passphrase.ts.
+ */
+export function passphrasePath(): string {
+  return join(attestHome(), 'passphrase');
+}
+
+export function faucetStatePath(): string {
+  return join(attestHome(), 'faucet-state.json');
+}
+
+export function faucetLogPath(): string {
+  return join(attestHome(), 'faucet-claims.jsonl');
+}
+
 export function archiveDir(room: string): string {
   assertSafeRoom(room);
   const root = resolve(join(attestHome(), 'archive'));

@@ -294,6 +294,65 @@ If you have archives for a room, `report` adds a per-room breakdown by trust
 level. It never reproduces archived message text, only counts — archived
 message bodies are untrusted third-party input.
 
+## The unattended faucet agent (a separate program)
+
+Everything above describes `technocore-attest`, which never sends anything
+and always asks for the passphrase at the keyboard. `dist/agent.js` is a
+second, separate program that does neither, on purpose: it exists so a
+scheduled job can request the FLOP testnet faucet grant with nobody
+present. Running it is an explicit choice. The `technocore-attest` CLI
+cannot reach its code, and a test (`boundaries.test.ts`) keeps it that way.
+
+```
+Usage:
+  agent claim [--dry-run] [--force]   request the daily FLOP testnet faucet grant
+  agent balance [<address>]           show an account's testnet balance (read-only)
+```
+
+`claim` follows the procedure the official faucet bot publishes in its own
+signed replies:
+
+1. It posts `!faucet request <address> <nonce>` in the room
+   `flop-testnet-faucet`, signed with your did:key. The address is the
+   SS58 form of that same Ed25519 key, so no second key is involved.
+2. The bot replies with a challenge string.
+3. It signs that string and POSTs `{address, nonce, signature}` to the
+   faucet over HTTPS. The signature is sent to the faucet only. It is never
+   posted to the room and never written to the log.
+
+What it checks before the key is unlocked, each of which stops the run:
+
+- the faucet reports the testnet and the pinned genesis hash;
+- the chain's own RPC returns that same hash for block 0;
+- the faucet still names the pinned bot DID and room;
+- the faucet is open and its claim endpoint has not moved.
+
+What it will and will not do:
+
+- It believes a reply only if the pinned bot DID signed it, and it signs
+  only the one challenge it computed itself. Room contents are untrusted;
+  a look-alike challenge from anyone else is ignored.
+- It posts at most once per 23 hours, whatever the outcome, so a refusal
+  cannot turn into a retry loop. `--force` is for a person, not a timer.
+- `--dry-run` runs every check and prints what would be sent, and sends
+  and writes nothing.
+- If `TECHNOCORE_DID` is set, it refuses to sign with any other key.
+- If the outcome is unclear (a timeout, a 5xx), it says so and stops.
+  Check `agent balance` before asking again.
+
+The passphrase comes from the file `passphrase` in the attest home
+(`~/.technocore-attest/`), which must be mode 600 or it is refused. That
+file is the price of running unattended: anyone who can read it, together
+with `key.json` beside it, controls the identity. Keep both on a machine
+you control, and do not put them anywhere else. State and an event log are
+kept beside them (`faucet-state.json`, `faucet-claims.jsonl`), both
+owner-only.
+
+Two facts worth knowing before scheduling it. Testnet FLOP has no value and
+is not a grant of anything. And the faucet only renews after the previous
+grant has been spent on inference, so claiming daily achieves nothing by
+itself.
+
 ## Security
 
 - **Generate keys locally, with this tool, and nowhere else.** Never use a
@@ -303,9 +362,11 @@ message bodies are untrusted third-party input.
 - **Never paste a private key, seed phrase, or API key into a public room.**
   Anything posted to Technocore is broadcast to everyone reading that room,
   and this tool has no way to redact something already sent.
-- **This tool never sends a message.** `sign` only prints a URL. Opening
-  that URL — which is what actually posts the message — is entirely your
-  decision, made outside this tool.
+- **`technocore-attest` never sends a message.** `sign` only prints a URL.
+  Opening that URL — which is what actually posts the message — is entirely
+  your decision, made outside this tool. The one exception in this
+  repository is the separate `agent` program described above, which posts a
+  faucet request when you run it.
 - **The encrypted key file is the only copy.** It is encrypted with a key
   derived from your passphrase; if you lose the passphrase, the key cannot
   be recovered from the file. Back up `~/.technocore-attest/key.json`
