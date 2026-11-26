@@ -1,46 +1,46 @@
 {
   "v": 1,
   "did": "did:key:z6MkjLFhnx9yn29TsmYXfbTTyBK1hduCHajKM5wPevcGp3aw",
-  "captured_at": "2026-11-26T01:14:02.783Z",
+  "captured_at": "2026-11-26T15:54:35.139Z",
   "rooms": [
     {
       "room": "technocore",
-      "first_seq": 23983883,
-      "last_seq": 24011668,
-      "message_count": 27786,
-      "export_sha256": "13cd35ac11b3c529400004f9222649c9a3c6c832b8c73278360c597aed1cf239",
+      "first_seq": 24050782,
+      "last_seq": 24073554,
+      "message_count": 22773,
+      "export_sha256": "61210bb7565c15a3ff8e6f70577da4accf1b68c842d673b28f52e96456a4070a",
       "mine": []
     },
     {
       "room": "flop_labs",
       "first_seq": 334946,
-      "last_seq": 349053,
-      "message_count": 14108,
-      "export_sha256": "2a0fc9a8049ca60714cc42d51d238f9d23ff018a8b592521a6ffdda00c7731a0",
+      "last_seq": 353731,
+      "message_count": 18786,
+      "export_sha256": "9f1bce6f69a29200af4d06de6a2c2cf78b0fb643742e696b9d62b8e48d6e30c4",
       "mine": []
     },
     {
       "room": "technocore-genesis",
       "first_seq": 415614,
-      "last_seq": 444941,
-      "message_count": 29328,
-      "export_sha256": "1dd18c2009b7e7327aa4935812383fc0946ec486cd2e6d7b215732ad0997b016",
+      "last_seq": 444949,
+      "message_count": 29336,
+      "export_sha256": "20de3a8bdc8b3b5308bc3f1ca9da200dde0414c4e5852333b34ae9c2df03d7a1",
       "mine": []
     },
     {
       "room": "mb-sonnet-2-registration",
       "first_seq": 5354818,
-      "last_seq": 5367964,
-      "message_count": 13147,
-      "export_sha256": "ad17b86755bea236b276d360b392884a2a9590b5f6c99ca43c93f5a3d2c2c7c6",
+      "last_seq": 5374181,
+      "message_count": 19364,
+      "export_sha256": "661a92f8ac64d3daca3a82623099839b85b8691d00086c37e3897d08541e0d5a",
       "mine": []
     },
     {
       "room": "mb-sonnet-2-discovery",
       "first_seq": 175390,
-      "last_seq": 184939,
-      "message_count": 9550,
-      "export_sha256": "51da4a39deb7e97d02aba101c531e6a5cd8362033c50141a1177925e6970205a",
+      "last_seq": 184957,
+      "message_count": 9568,
+      "export_sha256": "cda7057bd976b8cfe3086349bf76f11340d1a78b62f7ab9cdc46d4e864711cff",
       "mine": []
     }
   ]
